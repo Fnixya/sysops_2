@@ -2,7 +2,7 @@
 
 //  MSH main file
 // Write your msh source code here
-
+#include <myshc.h>
 
 //#include "parser.h"
 #include <stddef.h>			/* NULL */
@@ -200,29 +200,8 @@ int main(int argc, char* argv[])
         }
 		//************************************************************************************************
 
-        // Each command (aside of mycalc and myhistory) must be executed from a child process 
-        int pid, status;
-        for (int i = 0; i < command_counter; i++) {
-            pid = fork();
-            // if child
-            if (pid == 0) {
-                // do command...
-                execvp(argvv[i], filev[i]);
-                
-                exit(0);
-            }
-            // if parent 
-            else if (!in_background) {
-                // wait
-                if (wait(&status) == -1) perror("Error while waiting child process");
-            }
-        }
-
-
-
-
-        //mycalc
-        //myhistory
+        // Student Code
+        exec_command(&argvv, filev, &in_background);
 
 		/************************ STUDENTS CODE ********************************/
 	    if (command_counter > 0) {
