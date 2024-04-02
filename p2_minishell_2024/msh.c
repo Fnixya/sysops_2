@@ -32,7 +32,7 @@ void siginthandler(int param)
 	exit(0);
 }
 
-/* myhistory */
+/* mycalc */
 
 /* myhistory */
 
@@ -197,32 +197,49 @@ int main(int argc, char* argv[])
 		/************************ STUDENTS CODE ********************************/
 	   if (command_counter > 0) {
 			if (command_counter > MAX_COMMANDS){
-				printf("Error: Maximum number of commands is %d \n", MAX_COMMANDS);
+				printf("Error: Maximum number of commands is %d, you have introduced %d \n", MAX_COMMANDS, command_counter);
 			}
 			else {
+                // Redirections of file descriptors
+                int fd, dupfd;
+                for (int i = 0; i < 3; i++) {
+                    if (strlen(filev[i]) > 0) {     // Redirect if entry of filev is not "\0"
+                        fd = open(filev[i], O_CREAT | O_WRONLY); //
+                        close(i);           /* close current */
+                        dupfd = dup(fd);    // STD = fd
+                        close(fd);          /* close file */
+                    }
+                    else {                          // Restore file descriptor to default ones if filev[i] is "\0": stdin, stdout, stderr
+                        fd = open(i, O_CREAT | O_WRONLY);       // stdin = 0; stdout = 1; stderr = 2;
+                        close(i);           /* close current */
+                        dupfd = dup(fd);    // STD = fd
+                        close(fd);          /* close file */
+                    }
+                }
+
                 int pid;
                 for (int i = 0; i < command_counter; i++) {
-                    // If command is myhistory
-                    if (strcmp(argvv[i][0], "myhistory") == 0) {
+                    if (strcmp(argvv[i][0], "myhistory") == 0) {        // If command is myhistory
                         // do myhistory
                     }
-                    // If command is mycalc
-                    else if (strcmp(argvv[i][0], "mycalc") == 0) {
+                    else if (strcmp(argvv[i][0], "mycalc") == 0) {      // If command is mycalc
                         // do mycalc
                     }
                     // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
                     else {        
+                        // Establish input, output and error channels (piping)
+
                         // Fork the process
                         pid = fork();
 
                         // If the current process is a CHILD process
                         if (pid == 0) {
                             // EXECUTE COMMAND
-                            // Establish input, output and error channels
 
 
                             execvp(argvv[i][0], argvv[i]);
                             exit(0);
+                            continue;
                         }
                         // If the current process is a PARENT process
                         else if (!in_background) {
@@ -233,7 +250,7 @@ int main(int argc, char* argv[])
                 }
 
 				// Print command
-                // esto creo q se borra pero es apoyo visual para el desarrollo del msh
+                // esto creo q se borra pq es apoyo visual para el desarrollo del msh
 				print_command(argvv, filev, in_background);
 			}
 		}
