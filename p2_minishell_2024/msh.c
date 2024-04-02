@@ -73,8 +73,6 @@ void free_command(struct command *cmd)
         }
     }
     free((*cmd).args);
-
-    return;
 }
 
 void store_command(char ***argvv, char filev[3][64], int in_background, struct command* cmd)
@@ -115,8 +113,6 @@ void store_command(char ***argvv, char filev[3][64], int in_background, struct c
             strcpy((*cmd).argvv[i][j], argvv[i][j] );
         }
     }
-
-    return;
 }
 
 
@@ -149,7 +145,6 @@ int main(int argc, char* argv[])
 	char *cmd_line = NULL;
 	char *cmd_lines[10];
 
-    // que hace esto
 	if (!isatty(STDIN_FILENO)) {
 		cmd_line = (char*)malloc(100);
 		while (scanf(" %[^\n]", cmd_line) != EOF){
@@ -174,63 +169,71 @@ int main(int argc, char* argv[])
 	{
 		int status = 0;
 		int command_counter = 0;
-        // Flag that stores if command is executed in the brackground or not (&)
 		int in_background = 0;
 		signal(SIGINT, siginthandler);
 
 		if (run_history)
-        {
-            run_history=0;
-        }
-        else {
-            // Prompt 
-            write(STDERR_FILENO, "MSH>>", strlen("MSH>>"));
+    {
+        run_history=0;
+    }
+    else{
+        // Prompt 
+        write(STDERR_FILENO, "MSH>>", strlen("MSH>>"));
 
-            // Get command
-            //********** DO NOT MODIFY THIS PART. IT DISTINGUISH BETWEEN NORMAL/CORRECTION MODE***************
-            executed_cmd_lines++;
-            if( end != 0 && executed_cmd_lines < end) {
-                command_counter = read_command_correction(&argvv, filev, &in_background, cmd_lines[executed_cmd_lines]);
-            }
-            else if( end != 0 && executed_cmd_lines == end)
-                return 0;
-            else
-                command_counter = read_command(&argvv, filev, &in_background); //NORMAL MODE
+        // Get command
+        //********** DO NOT MODIFY THIS PART. IT DISTINGUISH BETWEEN NORMAL/CORRECTION MODE***************
+        executed_cmd_lines++;
+        if( end != 0 && executed_cmd_lines < end) {
+            command_counter = read_command_correction(&argvv, filev, &in_background, cmd_lines[executed_cmd_lines]);
         }
+        else if( end != 0 && executed_cmd_lines == end)
+            return 0;
+        else
+            command_counter = read_command(&argvv, filev, &in_background); //NORMAL MODE
+    }
 		//************************************************************************************************
 
-        // Student Code
-        int pid, status;
-        for (int i = 0; i < command_counter; i++) {
-            if (strcmp(argvv[i][0], "myhistory") == 0) {
-                // do myhistory
-            }
-            else if (strcmp(argvv[i][0], "mycalc") == 0) {
-                // do mycalc
-            }
-            else {        
-                pid = fork();
-                // if child
-                if (pid == 0) {
-                    // do command...
-                    execvp(argvv[i][0], argvv[i]);
-                    exit(0);
-                }
-                // if parent 
-                else if (!in_background) {
-                    // wait
-                    if (wait(&status) == -1) perror("Error while waiting child process");
-                }
-            }
-        }
 
 		/************************ STUDENTS CODE ********************************/
-	    if (command_counter > 0) {
+	   if (command_counter > 0) {
 			if (command_counter > MAX_COMMANDS){
 				printf("Error: Maximum number of commands is %d \n", MAX_COMMANDS);
 			}
 			else {
+                int pid;
+                for (int i = 0; i < command_counter; i++) {
+                    // If command is myhistory
+                    if (strcmp(argvv[i][0], "myhistory") == 0) {
+                        // do myhistory
+                    }
+                    // If command is mycalc
+                    else if (strcmp(argvv[i][0], "mycalc") == 0) {
+                        // do mycalc
+                    }
+                    // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
+                    else {        
+                        // Fork the process
+                        pid = fork();
+
+                        // If the current process is a CHILD process
+                        if (pid == 0) {
+                            // EXECUTE COMMAND
+                            // Establish input, output and error channels
+
+
+                            execvp(argvv[i][0], argvv[i]);
+                            exit(0);
+                        }
+                        // If the current process is a PARENT process
+                        else if (!in_background) {
+                            // wait
+                            if (wait(&status) == -1) perror("Error while waiting child process");
+                        }
+                    }
+                }
+
 				// Print command
+                // esto creo q se borra pero es apoyo visual para el desarrollo del msh
 				print_command(argvv, filev, in_background);
 			}
 		}
