@@ -15,3 +15,8 @@ Guernika: https://www.lab.inf.uc3m.es/servicios/aulas-virtuales-del-laboratorio/
 Submit report: https://aulaglobal.uc3m.es/mod/turnitintooltwo/view.php?id=4910631
 
 Submit code: https://aulaglobal.uc3m.es/mod/assign/view.php?id=4910629
+
+
+
+
+Pipe commands exmaple: https://www.geeksforgeeks.org/piping-in-unix-or-linux/
