@@ -173,87 +173,93 @@ int main(int argc, char* argv[])
 		signal(SIGINT, siginthandler);
 
 		if (run_history)
-    {
-        run_history=0;
-    }
-    else{
-        // Prompt 
-        write(STDERR_FILENO, "MSH>>", strlen("MSH>>"));
-
-        // Get command
-        //********** DO NOT MODIFY THIS PART. IT DISTINGUISH BETWEEN NORMAL/CORRECTION MODE***************
-        executed_cmd_lines++;
-        if( end != 0 && executed_cmd_lines < end) {
-            command_counter = read_command_correction(&argvv, filev, &in_background, cmd_lines[executed_cmd_lines]);
+        {
+            run_history=0;
         }
-        else if( end != 0 && executed_cmd_lines == end)
-            return 0;
-        else
-            command_counter = read_command(&argvv, filev, &in_background); //NORMAL MODE
-    }
+        else {
+            // Prompt 
+            write(STDERR_FILENO, "MSH>>", strlen("MSH>>"));
+
+            // Get command
+            //********** DO NOT MODIFY THIS PART. IT DISTINGUISH BETWEEN NORMAL/CORRECTION MODE***************
+            executed_cmd_lines++;
+            if( end != 0 && executed_cmd_lines < end) {
+                command_counter = read_command_correction(&argvv, filev, &in_background, cmd_lines[executed_cmd_lines]);
+            }
+            else if( end != 0 && executed_cmd_lines == end)
+                return 0;
+            else
+                command_counter = read_command(&argvv, filev, &in_background); //NORMAL MODE
+        }
 		//************************************************************************************************
 
 
 		/************************ STUDENTS CODE ********************************/
-	   if (command_counter > 0) {
-			if (command_counter > MAX_COMMANDS){
-				printf("Error: Maximum number of commands is %d, you have introduced %d \n", MAX_COMMANDS, command_counter);
-			}
-			else {
-                // Redirections of file descriptors
-                int fd, dupfd;
-                for (int i = 0; i < 3; i++) {
-                    if (strlen(filev[i]) > 0) {     // Redirect if entry of filev is not "\0"
-                        fd = open(filev[i], O_CREAT | O_WRONLY); //
-                        close(i);           /* close current */
-                        dupfd = dup(fd);    // STD = fd
-                        close(fd);          /* close file */
-                    }
-                    else {                          // Restore file descriptor to default ones if filev[i] is "\0": stdin, stdout, stderr
-                        fd = open(i, O_CREAT | O_WRONLY);       // stdin = 0; stdout = 1; stderr = 2;
-                        close(i);           /* close current */
-                        dupfd = dup(fd);    // STD = fd
-                        close(fd);          /* close file */
-                    }
+	    if (command_counter < 1) continue;          //  Guardian clause to filter out no-commands
+
+        if (command_counter > MAX_COMMANDS) {       //  Guardian clause to filter out excessive number of commands
+            printf("Error: Maximum number of commands is %d, you have introduced %d \n", MAX_COMMANDS, command_counter);
+            continue;
+        }
+        
+        // Redirections of file descriptors
+        int fd, dupfd;
+        for (int i = 0; i < 3; i++) {
+            if (strlen(filev[i]) > 0) {     // Redirect if entry of filev is not "\0"
+                fd = open(filev[i], O_CREAT | O_WRONLY); //
+                close(i);           /* close current */
+                dupfd = dup(fd);    // STD = fd
+                close(fd);          /* close file */
+            }
+            else {                          // Restore file descriptor to default ones if filev[i] is "\0": stdin, stdout, stderr
+                fd = i;       // stdin = 0; stdout = 1; stderr = 2;
+                close(i);           /* close current */
+                dupfd = dup(fd);    // STD = fd
+                close(fd);          /* close file */
+            }
+        }
+
+
+        for (int i = 0; i < command_counter; i++) {
+            if (strcmp(argvv[i][0], "myhistory") == 0) {        // If command is myhistory
+                // do myhistory
+            }
+            else if (strcmp(argvv[i][0], "mycalc") == 0) {      // If command is mycalc
+                // do mycalc
+            }
+            // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
+            else {        
+                // Establish input, output and error channels (piping)
+
+                // Fork the process
+                // If the current process is a CHILD process
+                if (fork() == 0) {
+                    // EXECUTE COMMAND
+                    execvp(argvv[i][0], argvv[i]);
+                    exit(errno);
                 }
-
-                int pid;
-                for (int i = 0; i < command_counter; i++) {
-                    if (strcmp(argvv[i][0], "myhistory") == 0) {        // If command is myhistory
-                        // do myhistory
-                    }
-                    else if (strcmp(argvv[i][0], "mycalc") == 0) {      // If command is mycalc
-                        // do mycalc
-                    }
-                    // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
-                    else {        
-                        // Establish input, output and error channels (piping)
-
-                        // Fork the process
-                        pid = fork();
-
-                        // If the current process is a CHILD process
-                        if (pid == 0) {
-                            // EXECUTE COMMAND
-
-
-                            execvp(argvv[i][0], argvv[i]);
-                            exit(0);
-                            continue;
-                        }
-                        // If the current process is a PARENT process
-                        else if (!in_background) {
-                            // wait
-                            if (wait(&status) == -1) perror("Error while waiting child process");
-                        }
-                    }
+                // If the current process is a PARENT process
+                else if (!in_background) {
+                    // wait
+                    if (wait(&status) == -1) perror("Error while waiting child process");
+                    if (WIFEXITED(status))
+                        printf("Child process exited with status %d\n", WEXITSTATUS(status));
+                    
                 }
+            }
+        }
 
-				// Print command
-                // esto creo q se borra pq es apoyo visual para el desarrollo del msh
-				print_command(argvv, filev, in_background);
-			}
-		}
+        // Restore file descriptor to default ones if filev[i] is "\0": stdin, stdout, stderr
+        for (int i = 0; i < 3; i++) {
+            fd = i;       // stdin = 0; stdout = 1; stderr = 2;
+            close(i);           /* close current */
+            dupfd = dup(fd);    // STD = fd
+            close(fd);          /* close file */
+        }
+
+        // Print command
+        // esto creo q se borra pq es apoyo visual para el desarrollo del msh
+        print_command(argvv, filev, in_background);
 	}
 	
 	return 0;
