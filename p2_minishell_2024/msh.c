@@ -35,11 +35,7 @@ void siginthandler(int param)
 	exit(0);
 }
 
-/* mycalc */
-void mycalc(char *argv[]);
-
 /* myhistory */
-void myhistory(char *argv[]);
 
 struct command
 {
@@ -138,6 +134,10 @@ void getCompleteCommand(char*** argvv, int num_command) {
 		argv_execvp[i] = argvv[num_command][i];
 }
 
+/* Our custom functions */
+void mycalc(char *argv[]);
+void myhistory(char *argv[]);
+void refresh_stdfd(int *std_fd_copy);
 
 /**
  * Main sheell  Loop  
@@ -210,10 +210,7 @@ int main(int argc, char* argv[])
         }
 
         // Redirections of file descriptors
-        // !!!!!! Output redirection should be done only to the last command process
-        int fd;
-        int main_fd[3];
-        int std_fd_copy[3] = {0, 0, 0};      // Array to store the main file descriptors: stdin, stdout, stderr
+        int fd, std_fd_copy[3] = {0, 0, 0};      // Array to store the main file descriptors: stdin, stdout, stderr
         
         // Redirect error output if there is file
         if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
@@ -221,25 +218,27 @@ int main(int argc, char* argv[])
             if ((fd = open(filev[STDERR_FILENO],  O_CREAT | O_RDWR | O_TRUNC , S_IRUSR | S_IWUSR)) < 0) {
                 // perror("Error opening error output file");
                 fprintf(stderr, "Error opening error output file: %s\n", strerror(errno));
+                refresh_stdfd(std_fd_copy);
                 continue;
             } else {
                 std_fd_copy[STDERR_FILENO] = dup(STDERR_FILENO);                                 // Save std file descriptor
                 close(STDERR_FILENO);           /* close std  */
-                main_fd[STDERR_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
+                dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
                 close(fd);          /* close file */
             }
-        }
+        }   
 
         // Redirect error output if there is file
         if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
             // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
             if ((fd = open(filev[STDIN_FILENO], O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
                 fprintf(stderr, "Error opening input file: %s\n", strerror(errno));
+                refresh_stdfd(std_fd_copy);
                 continue;
             } else {
                 std_fd_copy[STDIN_FILENO] = dup(STDIN_FILENO);                                 // Save std file descriptor
                 close(STDIN_FILENO);           /* close std  */
-                main_fd[STDIN_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
+                dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
                 close(fd);          /* close file */
             }
         }
@@ -267,8 +266,7 @@ int main(int argc, char* argv[])
         // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
         else {        
             // If the sequence of commands is to be executed in the background, then create a subprocess that waits for all the child process to die
-            int pid;
-            pid = fork();
+            int pid = fork();
 
             // The process that has pid = 0 coordinates the command sequence
             if (pid == 0) {
@@ -277,6 +275,7 @@ int main(int argc, char* argv[])
                     // Creates two fid for an unnamed pipe. 
                     if (pipe(pipe_pid) < 0) {
                         perror("Error creating pipe. Process terminated\n");
+                        refresh_stdfd(std_fd_copy);
                         continue;
                     }
                 
@@ -311,7 +310,7 @@ int main(int argc, char* argv[])
 
                     std_fd_copy[STDOUT_FILENO] = dup(STDOUT_FILENO);                                 // Save std file descriptor
                     close(STDOUT_FILENO);           /* close std  */
-                    main_fd[STDOUT_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
+                    dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
                     close(fd);          /* close file */
                 }
                 else {
@@ -328,7 +327,7 @@ int main(int argc, char* argv[])
                     exit(errno);
                 }
                 else if (in_background) {
-                    write(STDOUT_FILENO, "[%d]\n", pid);
+                    fprintf(stdout, "[%d]\n", pid);
                 }
                 
                 if (wait(&status) == -1) perror("Error while waiting child process");
@@ -369,3 +368,14 @@ void mycalc(char *argv[]) {
 void myhistory(char *argv[]) {
 
 };
+
+/* This function */
+void refresh_stdfd(int *std_fd_copy) {
+    for (int i = 0; i < 3; i++) {
+        if (std_fd_copy[i]) {
+            close(i);                       /* close current */
+            dup(std_fd_copy[i]);            // STD = fd
+            close(std_fd_copy[i]);          /* close file */
+        }
+    }
+}
