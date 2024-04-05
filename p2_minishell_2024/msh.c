@@ -13,6 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <errno.h>      // errno
+
 #include <sys/wait.h>
 #include <signal.h>
 
@@ -33,8 +36,10 @@ void siginthandler(int param)
 }
 
 /* mycalc */
+void mycalc(char *argv[]);
 
 /* myhistory */
+void myhistory(char *argv[]);
 
 struct command
 {
@@ -195,66 +200,154 @@ int main(int argc, char* argv[])
 
 
 		/************************ STUDENTS CODE ********************************/
-	    if (command_counter < 1) continue;          //  Guardian clause to filter out no-commands
 
-        if (command_counter > MAX_COMMANDS) {       //  Guardian clause to filter out excessive number of commands
+                    
+        if (command_counter < 1) continue;          //  Guardian clause to filter out non-commands
+
+        if (command_counter > MAX_COMMANDS) {       //  Guardian clause to filter out a command sequence with excessive number of commands
             printf("Error: Maximum number of commands is %d, you have introduced %d \n", MAX_COMMANDS, command_counter);
             continue;
         }
-        
+
         // Redirections of file descriptors
-        int fd, dupfd;
-        for (int i = 0; i < 3; i++) {
-            if (strlen(filev[i]) > 0) {     // Redirect if entry of filev is not "\0"
-                fd = open(filev[i], O_CREAT | O_WRONLY); //
-                close(i);           /* close current */
-                dupfd = dup(fd);    // STD = fd
+        // !!!!!! Output redirection should be done only to the last command process
+        int fd;
+        int main_fd[3];
+        int std_fd_copy[3] = {0, 0, 0};      // Array to store the main file descriptors: stdin, stdout, stderr
+        
+        // Redirect error output if there is file
+        if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
+            // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
+            if ((fd = open(filev[STDIN_FILENO], O_RDWR | O_APPEND, S_IRUSR | S_IWUSR)) < 0) 
+                perror("Error opening file");
+            else {
+
+                std_fd_copy[STDIN_FILENO] = dup(STDIN_FILENO);                                 // Save std file descriptor
+                close(STDIN_FILENO);           /* close std  */
+                main_fd[STDIN_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
                 close(fd);          /* close file */
+
             }
-            else {                          // Restore file descriptor to default ones if filev[i] is "\0": stdin, stdout, stderr
-                fd = i;       // stdin = 0; stdout = 1; stderr = 2;
-                close(i);           /* close current */
-                dupfd = dup(fd);    // STD = fd
+        }
+
+        // Redirect error output if there is file
+        if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
+            // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
+            if ((fd = open(filev[STDIN_FILENO],  O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR)) < 0) 
+                perror("Error opening file");
+            else {
+                std_fd_copy[STDERR_FILENO] = dup(STDERR_FILENO);                                 // Save std file descriptor
+                close(STDERR_FILENO);           /* close std  */
+                main_fd[STDERR_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
                 close(fd);          /* close file */
             }
         }
 
+        // fork
+        // parent
+            // establish output redirection - not-last
+            // execute command - not-first
+            // wait for child - not-bg
+            // exit
+        // child
+            // establish input redirection - not-first
+            // continue if not-last
+            // execute command
 
-        for (int i = 0; i < command_counter; i++) {
-            if (strcmp(argvv[i][0], "myhistory") == 0) {        // If command is myhistory
-                // do myhistory
-            }
-            else if (strcmp(argvv[i][0], "mycalc") == 0) {      // If command is mycalc
-                // do mycalc
-            }
-            // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
-            else {        
-                // Establish input, output and error channels (piping)
+        // Execution of command or sequence of commands
+        if (strcmp(argvv[0][0], "myhistory") == 0) {        // If command is myhistory
+            // do myhistory
+            myhistory(argvv[0]);
+        }
+        else if (strcmp(argvv[0][0], "mycalc") == 0) {      // If command is mycalc
+            // do mycalc
+            mycalc(argvv[0]);
+        }
+        // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
+        else {        
+            // If the sequence of commands is to be executed in the background, then create a subprocess that waits for all the child process to die
+            int pid;
+            pid = fork();
 
-                // Fork the process
-                // If the current process is a CHILD process
-                if (fork() == 0) {
+            // The process that has pid = 0 coordinates the command sequence
+            if (pid == 0) {
+                int i = 0, pipe_pid[2];
+                while (i < command_counter - 1) {
+                    // Creates two fid for an unnamed pipe. 
+                    if (pipe(pipe_pid) < 0) {
+                        printf("Error creating pipe. Process terminated\n");
+                        continue;
+                    }
+                
+                    // Child process
+                    if ((pid = fork()) == 0) {   
+                        // Output redirection
+                        close(STDOUT_FILENO);
+                        dup(pipe_pid[STDOUT_FILENO]);
+                        close(pipe_pid[STDOUT_FILENO]);
+                        close(pipe_pid[STDIN_FILENO]);
+
+                        // EXECUTE COMMAND
+                        execvp(argvv[i][0], argvv[i]);
+                        exit(errno);
+                    }
+
+                    // Best to wait, in case the next process execs before the current process finishes
+                    // if (wait(&status) == -1) perror("Error while waiting child process");
+                    
+                    // Input redirection
+                    close(STDIN_FILENO);
+                    dup(pipe_pid[STDIN_FILENO]);
+                    close(pipe_pid[STDIN_FILENO]);
+                    close(pipe_pid[STDOUT_FILENO]);
+
+                    i++;
+                }
+                
+                if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
+                    // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
+                    if ((fd = open(filev[STDOUT_FILENO],  O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR)) < 0) perror("Error opening file");
+
+                    std_fd_copy[STDOUT_FILENO] = dup(STDOUT_FILENO);                                 // Save std file descriptor
+                    close(STDOUT_FILENO);           /* close std  */
+                    main_fd[STDOUT_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
+                    close(fd);          /* close file */
+                }
+                else {
+                    if (std_fd_copy[STDOUT_FILENO]) {
+                        close(STDOUT_FILENO);                       /* close current */
+                        dup(std_fd_copy[STDOUT_FILENO]);            // STD = fd
+                        close(std_fd_copy[STDOUT_FILENO]);          /* close file */
+                    }
+                }
+                
+                if ((pid = fork()) == 0) {
                     // EXECUTE COMMAND
                     execvp(argvv[i][0], argvv[i]);
                     exit(errno);
                 }
-                // If the current process is a PARENT process
-                else if (!in_background) {
-                    // wait
-                    if (wait(&status) == -1) perror("Error while waiting child process");
-                    if (WIFEXITED(status))
-                        printf("Child process exited with status %d\n", WEXITSTATUS(status));
-                    
+                else if (in_background) {
+                    write(STDOUT_FILENO, "[%d]\n", pid);
                 }
+                
+                if (wait(&status) == -1) perror("Error while waiting child process");
+                exit(errno);
             }
+            // else if (!in_background) {
+            //     // Shell waits for command handler if it is not executed in the background
+            //     if (wait(&status) == -1) perror("Error while waiting child process");
+            // }
+
+            if (wait(&status) == -1) perror("Error while waiting child process");
         }
 
-        // Restore file descriptor to default ones if filev[i] is "\0": stdin, stdout, stderr
+        // Restore file descriptor to default ones: stdin, stdout, stderr
         for (int i = 0; i < 3; i++) {
-            fd = i;       // stdin = 0; stdout = 1; stderr = 2;
-            close(i);           /* close current */
-            dupfd = dup(fd);    // STD = fd
-            close(fd);          /* close file */
+            if (std_fd_copy[i]) {
+                close(i);                       /* close current */
+                dup(std_fd_copy[i]);            // STD = fd
+                close(std_fd_copy[i]);          /* close file */
+            }
         }
 
         // Print command
@@ -264,3 +357,14 @@ int main(int argc, char* argv[])
 	
 	return 0;
 }
+
+
+/* mycalc */
+void mycalc(char *argv[]) {
+    
+};
+
+/* myhistory */
+void myhistory(char *argv[]) {
+
+};
