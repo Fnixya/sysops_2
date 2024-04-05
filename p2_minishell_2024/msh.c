@@ -216,29 +216,30 @@ int main(int argc, char* argv[])
         int std_fd_copy[3] = {0, 0, 0};      // Array to store the main file descriptors: stdin, stdout, stderr
         
         // Redirect error output if there is file
-        if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
+        if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
             // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
-            if ((fd = open(filev[STDIN_FILENO], O_RDWR | O_APPEND, S_IRUSR | S_IWUSR)) < 0) 
-                perror("Error opening file");
-            else {
-
-                std_fd_copy[STDIN_FILENO] = dup(STDIN_FILENO);                                 // Save std file descriptor
-                close(STDIN_FILENO);           /* close std  */
-                main_fd[STDIN_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
+            if ((fd = open(filev[STDERR_FILENO],  O_CREAT | O_RDWR | O_TRUNC , S_IRUSR | S_IWUSR)) < 0) {
+                // perror("Error opening error output file");
+                fprintf(stderr, "Error opening error output file: %s\n", strerror(errno));
+                continue;
+            } else {
+                std_fd_copy[STDERR_FILENO] = dup(STDERR_FILENO);                                 // Save std file descriptor
+                close(STDERR_FILENO);           /* close std  */
+                main_fd[STDERR_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
                 close(fd);          /* close file */
-
             }
         }
 
         // Redirect error output if there is file
-        if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
+        if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
             // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
-            if ((fd = open(filev[STDIN_FILENO],  O_CREAT | O_RDWR | O_APPEND, S_IRUSR | S_IWUSR)) < 0) 
-                perror("Error opening file");
-            else {
-                std_fd_copy[STDERR_FILENO] = dup(STDERR_FILENO);                                 // Save std file descriptor
-                close(STDERR_FILENO);           /* close std  */
-                main_fd[STDERR_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
+            if ((fd = open(filev[STDIN_FILENO], O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
+                fprintf(stderr, "Error opening input file: %s\n", strerror(errno));
+                continue;
+            } else {
+                std_fd_copy[STDIN_FILENO] = dup(STDIN_FILENO);                                 // Save std file descriptor
+                close(STDIN_FILENO);           /* close std  */
+                main_fd[STDIN_FILENO] = dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
                 close(fd);          /* close file */
             }
         }
@@ -275,7 +276,7 @@ int main(int argc, char* argv[])
                 while (i < command_counter - 1) {
                     // Creates two fid for an unnamed pipe. 
                     if (pipe(pipe_pid) < 0) {
-                        printf("Error creating pipe. Process terminated\n");
+                        perror("Error creating pipe. Process terminated\n");
                         continue;
                     }
                 
@@ -352,7 +353,7 @@ int main(int argc, char* argv[])
 
         // Print command
         // esto creo q se borra pq es apoyo visual para el desarrollo del msh
-        print_command(argvv, filev, in_background);
+        // print_command(argvv, filev, in_background);
 	}
 	
 	return 0;
