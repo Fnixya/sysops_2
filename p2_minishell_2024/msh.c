@@ -361,13 +361,53 @@ int main(int argc, char* argv[])
 
 /* mycalc */
 void mycalc(char *argv[]) {
-    
-};
+    int operand1 = atoi(argv[2]);
+    int operand2 = atoi(argv[3]);
+    if (strcmp(argv[1], "add") == 0) {
+        printf("[OK] %d + %d = %d\n", operand1, operand2, operand1 + operand2);
+    } else if (strcmp(argv[1], "mul") == 0) {
+        printf("[OK] %d * %d = %d\n", operand1, operand2, operand1 * operand2);
+    } else if (strcmp(argv[1], "div") == 0) {
+        if (operand2 == 0) {
+            printf("[ERROR] Division by zero is not allowed.\n");
+            return;
+        }
+        printf("[OK] %d / %d = %d; Remainder %d\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
+    } else {
+        printf("[ERROR] The structure of the command is mycalc <add/mul/div> <operand 1> <operand 2>\n");
+    }
+}
 
 /* myhistory */
 void myhistory(char *argv[]) {
-
-};
+    if (argv[1] == NULL) {
+        for (int i = 0; i < 20; i++) {
+            printf("<%d> %s %s %s %s\n", i, history[i].args[0], history[i].args[1], history[i].args[2], history[i].args[3]);
+        }
+    } else {
+        int index = atoi(argv[1]);
+        if (index < 0 || index >= 20) {
+            printf("ERROR: Command not found\n");
+        } else {
+            printf("Running command <%d>\n", index);
+            char *args[4] = {NULL, NULL, NULL, NULL}; // Initialize all elements to NULL
+            char arg0[12], arg1[12], arg2[12]; // Buffer to hold the string representation of the integers
+            if (history[index].args[0] != 0) {
+                sprintf(arg0, "%s", history[index].args[0]);
+                args[0] = arg0;
+            }
+            if (history[index].args[1] != 0) {
+                sprintf(arg1, "%s", history[index].args[1]);
+                args[1] = arg1;
+            }
+            if (history[index].args[2] != 0) {
+                sprintf(arg2, "%s", history[index].args[2]);
+                args[2] = arg2;
+            }
+            mycalc(args);
+        }
+    }
+}
 
 /* This function */
 void refresh_stdfd(int *std_fd_copy) {
