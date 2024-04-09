@@ -134,11 +134,26 @@ void getCompleteCommand(char*** argvv, int num_command) {
 		argv_execvp[i] = argvv[num_command][i];
 }
 
-/* Our custom functions */
+
+
+
+/* Our custom functions __________________________________ */
+
 void mycalc(char *argv[]);
 void myhistory(char *argv[]);
-void restore_stdfd(int std_fd_copy[]);
-int open_file(int* std_fd_copy, int fileno);
+
+void sigchldhandler(int param);
+void bg_sigchldhandler(int param);
+
+void restore_stdfd(int *stdfd_backup);
+int open_file(int *stdfd_backup, int fileno);
+
+/* Our custom variables __________________________________ */
+
+int stdfd_backup[3] = {0};  // Array to store the backup of the main file descriptors: stdin, stdout, stderr. Initialized to zero
+long mycalc_acc = 0;        // Accumulator for mycalc operations
+
+/* _______________________________________________________ */
 
 /**
  * Main sheell  Loop  
@@ -202,77 +217,53 @@ int main(int argc, char* argv[])
 
 		/************************ STUDENTS CODE ********************************/
       
-        if (command_counter < 1) continue;          //  Guardian clause to filter out non-commands
+        if (command_counter < 1) continue;          //  Guardian clause to filter out empty entries
 
         if (command_counter > MAX_COMMANDS) {       //  Guardian clause to filter out a command sequence with excessive number of commands
-            printf("Error: Maximum number of commands is %d, you have introduced %d \n", MAX_COMMANDS, command_counter);
+            fprintf(stderr, "Error: Maximum number of commands is %d, you have introduced %d \n", MAX_COMMANDS, command_counter);
             continue;
         }
 
-        // Redirections of file descriptors
-        int fd, std_fd_copy[3] = {0, 0, 0};      // Array to store the main file descriptors: stdin, stdout, stderr
+        // SIGCHLD signal handler
+        signal(SIGCHLD, sigchldhandler);
         
-        // Redirect error output if there is file
+        // Redirect error output if there is file in filev
         if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
-            // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
-            if ((fd = open(filev[STDERR_FILENO],  O_CREAT | O_RDWR | O_TRUNC , S_IRUSR | S_IWUSR)) < 0) {
-                fprintf(stderr, "Error opening error output file: %s\n", strerror(errno));
-                restore_stdfd(std_fd_copy);
-                continue;
-            } else {
-                std_fd_copy[STDERR_FILENO] = dup(STDERR_FILENO);                                 // Save std file descriptor
-                close(STDERR_FILENO);           /* close std  */
-                dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
-                close(fd);          /* close file */
-            }
+            if (open_file(stdfd_backup, STDERR_FILENO) < 0) continue;
         }   
 
-        // Redirect error output if there is file
+        // Redirect input if there is file in filev
         if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
-            // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
-            if ((fd = open(filev[STDIN_FILENO], O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
-                fprintf(stderr, "Error opening input file: %s\n", strerror(errno));
-                restore_stdfd(std_fd_copy);
-                continue;
-            } else {
-                std_fd_copy[STDIN_FILENO] = dup(STDIN_FILENO);                                 // Save std file descriptor
-                close(STDIN_FILENO);           /* close std  */
-                dup(fd);            // Redirect file descriptor to i: {0, 1, 2}. Saving it is trivial since we know it's in 0, 1 or 2
-                close(fd);          /* close file */
-            }
+            if (open_file(stdfd_backup, STDIN_FILENO) < 0) continue;
         }
-
-        // fork
-        // parent
-            // establish output redirection - not-last
-            // execute command - not-first
-            // wait for child - not-bg
-            // exit
-        // child
-            // establish input redirection - not-first
-            // continue if not-last
-            // execute command
-
+        
         // Execution of command or sequence of commands
         if (strcmp(argvv[0][0], "myhistory") == 0) {        // If command is myhistory
-            // do myhistory
             myhistory(argvv[0]);
         }
         else if (strcmp(argvv[0][0], "mycalc") == 0) {      // If command is mycalc
-            // do mycalc
             mycalc(argvv[0]);
         }
         // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
         else {        
             // The process that has pid = 0 coordinates the command sequence
-            int pid = fork();
+            int pid = 0;
+            if (in_background) { 
+                if ((pid = fork()) != 0) {  
+                    signal(SIGCHLD, bg_sigchldhandler);
+                }
+            }
+            else if (command_counter) {
+                stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);    // Backup stdin
+            }
+            
             if (pid == 0) {
                 int i = 0, pipe_pid[2];
                 while (i < command_counter - 1) {
                     // Creates two fid for an unnamed pipe. 
                     if (pipe(pipe_pid) < 0) {
                         fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
-                        restore_stdfd(std_fd_copy);
+                        restore_stdfd(stdfd_backup);
                         continue;
                     }
                 
@@ -298,24 +289,9 @@ int main(int argc, char* argv[])
                     i++;
                 }
                 
+                // Output redirection
                 if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
-                    if ((fd = open(filev[STDOUT_FILENO], O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR)) < 0) {
-                        fprintf(stderr, "Error opening output file: %s\n", strerror(errno));
-                        restore_stdfd(std_fd_copy);
-                        continue;
-                    } else {
-                        std_fd_copy[STDOUT_FILENO] = dup(STDOUT_FILENO);                                 
-                        close(STDOUT_FILENO);          
-                        dup(fd);            
-                        close(fd);         
-                    }
-                }
-                else {
-                    if (std_fd_copy[STDOUT_FILENO]) {
-                        close(STDOUT_FILENO);                       /* close current */
-                        dup(std_fd_copy[STDOUT_FILENO]);            // STD = fd
-                        close(std_fd_copy[STDOUT_FILENO]);          /* close file */
-                    }
+                    if (open_file(stdfd_backup, STDOUT_FILENO) < 0) continue;
                 }
                 
                 if ((pid = fork()) == 0) {
@@ -325,23 +301,24 @@ int main(int argc, char* argv[])
                 }
                 else if (in_background) {
                     fprintf(stderr, "[%d]\n", pid);
-                }
                 
-                if (wait(&status) == -1) {
-                    fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
+                    if (wait(&status) == -1) 
+                        fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
+                    exit(errno);
                 }
-                exit(errno);
-            }
-            else if (!in_background) {
-                // Shell waits for command handler if it is not executed in the background
-                if (wait(&status) == -1) {
-                    fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
+                else {
+                    if (wait(&status) == -1) 
+                        fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));                    
                 }
             }
         }
 
-        // Restore file descriptor to default ones: stdin, stdout, stderr
-        restore_stdfd(std_fd_copy);
+        // Restore file descriptor to default ones: stdin, stdout, stder
+        restore_stdfd(stdfd_backup);
+       
+        // // DEBUG
+        // if (isatty(fileno(stdin)))
+        //     printf( "stdin is a terminal\n" );
 
         // Print command
         // esto creo q se borra pq es apoyo visual para el desarrollo del msh
@@ -353,10 +330,16 @@ int main(int argc, char* argv[])
 
 /* mycalc */
 void mycalc(char *argv[]) {
+    // El acceso de los operand deberia ser argv[1] y no argv[3]
+    // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
+
+
+    // Better use strtol instead of atoi
+
     int operand1 = atoi(argv[2]);
     int operand2 = atoi(argv[3]);
     if (strcmp(argv[1], "add") == 0) {
-        printf("[OK] %d + %d = %d\n", operand1, operand2, operand1 + operand2);
+        printf("[OK] %d + %d = %d; Acc %d\n", operand1, operand2, operand1 + operand2, mycalc_acc);
     } else if (strcmp(argv[1], "mul") == 0) {
         printf("[OK] %d * %d = %d\n", operand1, operand2, operand1 * operand2);
     } else if (strcmp(argv[1], "div") == 0) {
@@ -401,47 +384,78 @@ void myhistory(char *argv[]) {
     }
 }
 
+// To effectively kill the child process
+void sigchldhandler(int param)
+{
+	// printf("****  CHILD DEAD! **** \n");
+    signal(SIGCHLD, sigchldhandler);
+    return;  
+}
+
+// To effectively kill the child process
+void bg_sigchldhandler(int param)
+{
+	// printf("****  BG CHILD DEAD! **** \n");
+
+    /* Since SIGCHLD is only sent by inmmidiate children, we can make sure that
+    that the signal is sent by the command sequence handler process */
+    int status = 0;
+    if (wait(&status) == -1) 
+        fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno)); 
+
+    signal(SIGCHLD, sigchldhandler);
+    return;
+}
+
 /* This function */
-void restore_stdfd(int std_fd_copy[]) {
+void restore_stdfd(int *stdfd_backup) {
     for (int i = 0; i < 3; i++) {
-        if (std_fd_copy[i] > 2) {
+        if (stdfd_backup[i] > 2) {
             close(i);                       /* close current */
-            dup(std_fd_copy[i]);            // STD = fd
-            close(std_fd_copy[i]);          /* close file */
-            std_fd_copy[i] = i;
+            dup(stdfd_backup[i]);            // STD = fd
+            close(stdfd_backup[i]);          /* close file */
+            stdfd_backup[i] = 0;
         }
     }
 }
 
-// int open_file(int* std_fd_copy, int fileno) {
-//     int filev_fd;
-//     switch (fileno) {
-//         case STDIN_FILENO:
-//             if ((filev_fd = open(filev[STDIN_FILENO], O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
-//                 fprintf(stderr, "Error opening input file: %s\n", strerror(errno));
-//                 restore_stdfd(std_fd_copy);
-//                 return filev_fd;
-//             } 
-//             break;
-//         case STDOUT_FILENO:
-//             if ((filev_fd = open(filev[STDOUT_FILENO], O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR)) < 0) {
-//                 fprintf(stderr, "Error opening output file: %s\n", strerror(errno));
-//                 restore_stdfd(std_fd_copy);
-//                 return filev_fd;
-//             }
-//             break;
-//         case STDERR_FILENO:
-//             if ((filev_fd = open(filev[STDERR_FILENO],  O_CREAT | O_RDWR | O_TRUNC , S_IRUSR | S_IWUSR)) < 0) {
-//                 fprintf(stderr, "Error opening error output file: %s\n", strerror(errno));
-//                 restore_stdfd(std_fd_copy);
-//                 return filev_fd;
-//             } 
-//             break;
-//     }
+// Redirection of file descriptors
+int open_file(int *stdfd_backup, int fileno) {
+    int filev_fd;
+    switch (fileno) {
+        case STDIN_FILENO:
+            // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
+            if ((filev_fd = open(filev[STDIN_FILENO], O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
+                fprintf(stderr, "Error opening input file: %s\n", strerror(errno));
+                restore_stdfd(stdfd_backup);
+                return filev_fd;
+            }
+            break;
+        case STDOUT_FILENO:
+            if ((filev_fd = open(filev[STDOUT_FILENO], O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR)) < 0) {
+                fprintf(stderr, "Error opening output file: %s\n", strerror(errno));
+                restore_stdfd(stdfd_backup);
+                return filev_fd;
+            }
+            break;
+        case STDERR_FILENO:
+            if ((filev_fd = open(filev[STDERR_FILENO],  O_CREAT | O_WRONLY | O_TRUNC , S_IRUSR | S_IWUSR)) < 0) {
+                fprintf(stderr, "Error opening error output file: %s\n", strerror(errno));
+                restore_stdfd(stdfd_backup);
+                return filev_fd;
+            } 
+            break;
+    }
 
-//     std_fd_copy[fileno] = dup(fileno);                            
-//     close(fileno);          
-//     dup(fd);            
-//     close(fd);         
-//     return fileno;
-// }
+    stdfd_backup[fileno] = dup(fileno);                            
+    close(fileno);          
+    dup(filev_fd);            
+    close(filev_fd);     
+
+    return fileno;
+}
+
+
+
+
+// Problemas con sequencias en foreground
