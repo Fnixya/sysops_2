@@ -316,10 +316,6 @@ int main(int argc, char* argv[])
         // Restore file descriptor to default ones: stdin, stdout, stder
         restore_stdfd(stdfd_backup);
        
-        // // DEBUG
-        // if (isatty(fileno(stdin)))
-        //     printf( "stdin is a terminal\n" );
-
         // Print command
         // esto creo q se borra pq es apoyo visual para el desarrollo del msh
         // print_command(argvv, filev, in_background);
@@ -330,26 +326,54 @@ int main(int argc, char* argv[])
 
 /* mycalc */
 void mycalc(char *argv[]) {
-    // El acceso de los operand deberia ser argv[1] y no argv[3]
-    // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
+    // Result in stderr
+    // Error in stdout
 
-
-    // Better use strtol instead of atoi
-
-    int operand1 = atoi(argv[2]);
-    int operand2 = atoi(argv[3]);
-    if (strcmp(argv[1], "add") == 0) {
-        printf("[OK] %d + %d = %d; Acc %d\n", operand1, operand2, operand1 + operand2, mycalc_acc);
-    } else if (strcmp(argv[1], "mul") == 0) {
-        printf("[OK] %d * %d = %d\n", operand1, operand2, operand1 * operand2);
-    } else if (strcmp(argv[1], "div") == 0) {
-        if (operand2 == 0) {
-            printf("[ERROR] Division by zero is not allowed.\n");
+    for (int i = 0; i < 4; i++) {
+        if (argv[i] == NULL) {
+            fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
             return;
         }
-        printf("[OK] %d / %d = %d; Remainder %d\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
+    }
+
+    if (argv[4] != NULL) {
+        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
+        return;
+    }
+
+    // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
+    char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
+    long operand1, operand2;
+
+    nptr = argv[1];
+    endptr = NULL;
+    operand1 = strtol(nptr, &endptr, 10);
+    if (nptr && *endptr != 0) {
+        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
+        return;
+    }
+
+    nptr = argv[3];
+    endptr = NULL;
+    operand2 = strtol(nptr, &endptr, 10);
+    if (nptr && *endptr != 0) {
+        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
+        return;
+    }
+
+    if (strcmp(argv[2], "add") == 0) {
+        fprintf(stderr, "[OK] %ld + %ld = %ld; Acc %ld\n", operand1, operand2, operand1 + operand2, (mycalc_acc += operand1 + operand2));
+    } 
+    else if (strcmp(argv[2], "mul") == 0) {
+        fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, operand1 * operand2);
+    } else if (strcmp(argv[2], "div") == 0) {
+        if (operand2 == 0) {
+            fprintf(stdout, "[ERROR] Division by zero is not allowed.\n");
+            return;
+        }
+        fprintf(stderr, "[OK] %ld / %ld = %ld; Remainder %ld\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
     } else {
-        printf("[ERROR] The structure of the command is mycalc <add/mul/div> <operand 1> <operand 2>\n");
+        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
     }
 }
 
@@ -407,10 +431,10 @@ void bg_sigchldhandler(int param)
     return;
 }
 
-/* This function */
+/* This function restores all  */
 void restore_stdfd(int *stdfd_backup) {
     for (int i = 0; i < 3; i++) {
-        if (stdfd_backup[i] > 2) {
+        if (stdfd_backup[i] != 0) {
             close(i);                       /* close current */
             dup(stdfd_backup[i]);            // STD = fd
             close(stdfd_backup[i]);          /* close file */
@@ -458,4 +482,4 @@ int open_file(int *stdfd_backup, int fileno) {
 
 
 
-// Problemas con sequencias en foreground
+// Cambiar mycalc_acc por un environment variable
