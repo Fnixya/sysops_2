@@ -395,14 +395,17 @@ void mycalc(char *argv[]) {
 void myhistory(char *argv[]) {
     if (argv[1] == NULL) {
         for (int i = 0; i < 20; i++) {
-            printf("<%d> %s %s %s %s\n", i, history[i].args[0], history[i].args[1], history[i].args[2], history[i].args[3]);
+            fprintf(stderr, "<%d> %s %s %s %s\n", i, history[i].args[0], history[i].args[1], history[i].args[2], history[i].args[3]);
         }
     } else {
         int index = atoi(argv[1]);
+        // if (my_strtol(argv[1], &index, "index") < 0) return;
+
         if (index < 0 || index >= 20) {
-            printf("ERROR: Command not found\n");
-        } else {
-            printf("Running command <%d>\n", index);
+            fprintf(stdout, "ERROR: Command not found\n");
+        }
+         else {
+            fprintf(stderr, "Running command <%d>\n", index);
             char *args[4] = {NULL, NULL, NULL, NULL}; // Initialize all elements to NULL
             char arg0[12], arg1[12], arg2[12]; // Buffer to hold the string representation of the integers
             if (history[index].args[0] != 0) {
