@@ -146,11 +146,11 @@ void myhistory(char *argv[]);
 void sigchldhandler(int param);
 void bg_sigchldhandler(int param);
 
-int my_strtol(char *string, long *number);
+int my_strtol(char *string, long *number, const char* var);
 void restore_stdfd(int *stdfd_backup);
 int open_file(int *stdfd_backup, int fileno);
 
-/* Our custom variables __________________________________ */
+/* Our custom global variables __________________________________ */
 
 int stdfd_backup[3] = {0};  // Array to store the backup of the main file descriptors: stdin, stdout, stderr. Initialized to zero
 char acc_str[11];
@@ -354,16 +354,17 @@ void mycalc(char *argv[]) {
     long operand1, operand2, acc_l;
 
     // Conversion of <openrand_1> from str to long int using strtol (more secure)
-    if (my_strtol(argv[1], &operand1) < 0) return;
+    if (my_strtol(argv[1], &operand1, "operand_1") < 0) return;
 
 
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
-    if (my_strtol(argv[3], &operand2) < 0) return;
+    if (my_strtol(argv[3], &operand2, "operand_2") < 0) return;
 
 
+    // Calculations
     if (strcmp(argv[2], "add") == 0) {
         // Conversion of Acc from str to long int using strtol (more secure)
-        if (my_strtol(getenv("Acc"), &acc_l) < 0) return;
+        if (my_strtol(getenv("Acc"), &acc_l, "acc") < 0) return;
 
         // sprintf() more secure than itoa() for conversion of: int -> str
         sprintf(acc_str, "%ld", acc_l += operand1 + operand2);
@@ -371,7 +372,12 @@ void mycalc(char *argv[]) {
         fprintf(stderr, "[OK] %ld + %ld = %ld; Acc %ld\n", operand1, operand2, operand1 + operand2, acc_l);
     } 
     else if (strcmp(argv[2], "mul") == 0) {
-        fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, operand1 * operand2);
+        int res = operand1 * operand2;
+        if (res / operand1 != operand2) {
+            fprintf(stdout, "[ERROR] Overflow at multiplication\n");
+            return;
+        }
+        fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, res);
     } 
     else if (strcmp(argv[2], "div") == 0) {
         if (operand2 == 0) {
@@ -429,8 +435,8 @@ void bg_sigchldhandler(int param)
 {
 	// printf("****  BG CHILD DEAD! **** \n");
 
-    /* Since SIGCHLD is only sent by inmmidiate children, we can make sure that
-    that the signal is sent by the command sequence handler process */
+    /* Since SIGCHLD is only sent by inmmidiate children, it can be activated 
+    before forking the shell so that it can wait and kill the child process effectively */
     int status = 0;
     if (wait(&status) == -1) 
         fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno)); 
@@ -441,7 +447,7 @@ void bg_sigchldhandler(int param)
 
 
 /* Error -1 otherwise 0 */
-int my_strtol(char *string, long *number) {
+int my_strtol(char *string, long *number, const char* var) {
     // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
     char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
     
@@ -455,12 +461,12 @@ int my_strtol(char *string, long *number) {
     }
     else if (errno == ERANGE && *number == LONG_MAX)
     {
-        fprintf(stdout, "[ERROR] Overflow at <operand 1>\n");
+        fprintf(stdout, "[ERROR] Overflow at <%s>\n", var);
         return -1;
     }
     else if (errno == ERANGE && *number == LONG_MIN)
     {
-        fprintf(stdout, "[ERROR] Underflow at <operand 1>\n");
+        fprintf(stdout, "[ERROR] Underflow at <%s>\n", var);
         return -1;
     }
 
