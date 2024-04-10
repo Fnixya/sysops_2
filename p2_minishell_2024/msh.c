@@ -151,7 +151,7 @@ int open_file(int *stdfd_backup, int fileno);
 /* Our custom variables __________________________________ */
 
 int stdfd_backup[3] = {0};  // Array to store the backup of the main file descriptors: stdin, stdout, stderr. Initialized to zero
-long mycalc_acc = 0;        // Accumulator for mycalc operations
+char acc_str[11];
 
 /* _______________________________________________________ */
 
@@ -160,6 +160,13 @@ long mycalc_acc = 0;        // Accumulator for mycalc operations
  */
 int main(int argc, char* argv[])
 {
+    /* Our code SETENV  __________________________________ */
+
+    setenv("Acc", "0", 0);
+    
+    /* _______________________________________________ */
+
+
 	/**** Do not delete this code.****/
 	int end = 0; 
 	int executed_cmd_lines = -1;
@@ -185,6 +192,7 @@ int main(int argc, char* argv[])
 
 	history = (struct command*) malloc(history_size *sizeof(struct command));
 	int run_history = 0;
+
 
 	while (1) 
 	{
@@ -343,36 +351,65 @@ void mycalc(char *argv[]) {
 
     // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
     char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
-    long operand1, operand2;
+    long operand1, operand2, acc;
 
+    // Conversion of <openrand_1> from str to long int using strtol (more secure)
     nptr = argv[1];
     endptr = NULL;
+    errno = 0;
     operand1 = strtol(nptr, &endptr, 10);
     if (nptr && *endptr != 0) {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
         return;
     }
+    else if (errno == ERANGE)
+    {
+        fprintf(stdout, "[ERROR] Underflow at <operand 1>\n");
+        return;
+    }
+    
 
+    // Conversion of <openrand_2> from str to long int using strtol (more secure)
     nptr = argv[3];
     endptr = NULL;
+    errno = 0;
     operand2 = strtol(nptr, &endptr, 10);
     if (nptr && *endptr != 0) {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
         return;
     }
+    else if (errno == ERANGE)
+    {
+        fprintf(stdout, "[ERROR] Overflow/Underflow at <operand 1>\n");
+        return;
+    }
+
 
     if (strcmp(argv[2], "add") == 0) {
-        fprintf(stderr, "[OK] %ld + %ld = %ld; Acc %ld\n", operand1, operand2, operand1 + operand2, (mycalc_acc += operand1 + operand2));
+        // Conversion of Acc from str to long int using strtol (more secure)
+        nptr = getenv("Acc"); 
+        endptr = NULL;
+        acc_l = strtol(nptr, &endptr, 10);
+        if (nptr && *endptr != 0) {
+            fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
+            return;
+        }
+
+        sprintf(acc_str, "%d", acc_l += operand1 + operand2);
+        setenv("Acc", acc_str, 1);
+        fprintf(stderr, "[OK] %ld + %ld = %ld; Acc %ld\n", operand1, operand2, operand1 + operand2, acc_l);
     } 
     else if (strcmp(argv[2], "mul") == 0) {
         fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, operand1 * operand2);
-    } else if (strcmp(argv[2], "div") == 0) {
+    } 
+    else if (strcmp(argv[2], "div") == 0) {
         if (operand2 == 0) {
-            fprintf(stdout, "[ERROR] Division by zero is not allowed.\n");
+            fprintf(stdout, "[ERROR] Division by Siro is not allowed.\n");
             return;
         }
         fprintf(stderr, "[OK] %ld / %ld = %ld; Remainder %ld\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
-    } else {
+    } 
+    else {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
     }
 }
@@ -448,22 +485,21 @@ int open_file(int *stdfd_backup, int fileno) {
     int filev_fd;
     switch (fileno) {
         case STDIN_FILENO:
-            // Open file: https://stackoverflow.com/questions/59602852/permission-denied-in-open-function-in-c
-            if ((filev_fd = open(filev[STDIN_FILENO], O_RDONLY, S_IRUSR | S_IWUSR)) < 0) {
+            if ((filev_fd = open(filev[STDIN_FILENO], O_RDONLY)) < 0) {
                 fprintf(stderr, "Error opening input file: %s\n", strerror(errno));
                 restore_stdfd(stdfd_backup);
                 return filev_fd;
             }
             break;
         case STDOUT_FILENO:
-            if ((filev_fd = open(filev[STDOUT_FILENO], O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR)) < 0) {
+            if ((filev_fd = open(filev[STDOUT_FILENO], O_CREAT | O_WRONLY | O_TRUNC, 0664)) < 0) {
                 fprintf(stderr, "Error opening output file: %s\n", strerror(errno));
                 restore_stdfd(stdfd_backup);
                 return filev_fd;
             }
             break;
         case STDERR_FILENO:
-            if ((filev_fd = open(filev[STDERR_FILENO],  O_CREAT | O_WRONLY | O_TRUNC , S_IRUSR | S_IWUSR)) < 0) {
+            if ((filev_fd = open(filev[STDERR_FILENO],  O_CREAT | O_WRONLY | O_TRUNC , 0664)) < 0) {
                 fprintf(stderr, "Error opening error output file: %s\n", strerror(errno));
                 restore_stdfd(stdfd_backup);
                 return filev_fd;
