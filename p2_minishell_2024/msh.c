@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include <errno.h>      // errno
+#include <limits.h>      // for overflow and underflow
 
 #include <sys/wait.h>
 #include <signal.h>
@@ -145,6 +146,7 @@ void myhistory(char *argv[]);
 void sigchldhandler(int param);
 void bg_sigchldhandler(int param);
 
+int my_strtol(char *string, long *number);
 void restore_stdfd(int *stdfd_backup);
 int open_file(int *stdfd_backup, int fileno);
 
@@ -349,53 +351,22 @@ void mycalc(char *argv[]) {
         return;
     }
 
-    // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
-    char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
-    long operand1, operand2, acc;
+    long operand1, operand2, acc_l;
 
     // Conversion of <openrand_1> from str to long int using strtol (more secure)
-    nptr = argv[1];
-    endptr = NULL;
-    errno = 0;
-    operand1 = strtol(nptr, &endptr, 10);
-    if (nptr && *endptr != 0) {
-        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
-        return;
-    }
-    else if (errno == ERANGE)
-    {
-        fprintf(stdout, "[ERROR] Underflow at <operand 1>\n");
-        return;
-    }
-    
+    if (my_strtol(argv[1], &operand1) < 0) return;
+
 
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
-    nptr = argv[3];
-    endptr = NULL;
-    errno = 0;
-    operand2 = strtol(nptr, &endptr, 10);
-    if (nptr && *endptr != 0) {
-        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
-        return;
-    }
-    else if (errno == ERANGE)
-    {
-        fprintf(stdout, "[ERROR] Overflow/Underflow at <operand 1>\n");
-        return;
-    }
+    if (my_strtol(argv[3], &operand2) < 0) return;
 
 
     if (strcmp(argv[2], "add") == 0) {
         // Conversion of Acc from str to long int using strtol (more secure)
-        nptr = getenv("Acc"); 
-        endptr = NULL;
-        acc_l = strtol(nptr, &endptr, 10);
-        if (nptr && *endptr != 0) {
-            fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
-            return;
-        }
+        if (my_strtol(getenv("Acc"), &acc_l) < 0) return;
 
-        sprintf(acc_str, "%d", acc_l += operand1 + operand2);
+        // sprintf() more secure than itoa() for conversion of: int -> str
+        sprintf(acc_str, "%ld", acc_l += operand1 + operand2);
         setenv("Acc", acc_str, 1);
         fprintf(stderr, "[OK] %ld + %ld = %ld; Acc %ld\n", operand1, operand2, operand1 + operand2, acc_l);
     } 
@@ -404,7 +375,7 @@ void mycalc(char *argv[]) {
     } 
     else if (strcmp(argv[2], "div") == 0) {
         if (operand2 == 0) {
-            fprintf(stdout, "[ERROR] Division by Siro is not allowed.\n");
+            fprintf(stdout, "[ERROR] Division by zero is not allowed.\n");
             return;
         }
         fprintf(stderr, "[OK] %ld / %ld = %ld; Remainder %ld\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
@@ -468,6 +439,36 @@ void bg_sigchldhandler(int param)
     return;
 }
 
+
+/* Error -1 otherwise 0 */
+int my_strtol(char *string, long *number) {
+    // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
+    char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
+    
+    nptr = string;
+    endptr = NULL;
+    errno = 0;
+    *number = strtol(nptr, &endptr, 10);
+    if (nptr && *endptr != 0) {
+        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
+        return -1;
+    }
+    else if (errno == ERANGE && *number == LONG_MAX)
+    {
+        fprintf(stdout, "[ERROR] Overflow at <operand 1>\n");
+        return -1;
+    }
+    else if (errno == ERANGE && *number == LONG_MIN)
+    {
+        fprintf(stdout, "[ERROR] Underflow at <operand 1>\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+
+
 /* This function restores all  */
 void restore_stdfd(int *stdfd_backup) {
     for (int i = 0; i < 3; i++) {
@@ -518,4 +519,4 @@ int open_file(int *stdfd_backup, int fileno) {
 
 
 
-// Cambiar mycalc_acc por un environment variable
+// Si te apetece ponerle error control a los resultados de las operaciones. Good luck.
