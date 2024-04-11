@@ -140,11 +140,11 @@ void getCompleteCommand(char*** argvv, int num_command) {
 
 /* Our custom functions __________________________________ */
 
-void mycalc(char *argv[]);
-void myhistory(char *argv[]);
+int mycalc(char *argv[]);
+int myhistory(char *argv[]);
 
 void sigchldhandler(int param);
-void bg_sigchldhandler(int param);
+// void fg_sigchldhandler(int param);
 
 int my_strtol(char *string, long *number, const char* var);
 void restore_stdfd(int *stdfd_backup);
@@ -164,6 +164,7 @@ int main(int argc, char* argv[])
 {
     /* Our code SETENV  __________________________________ */
 
+    signal(SIGCHLD, sigchldhandler);
     setenv("Acc", "0", 0);
     
     /* _______________________________________________ */
@@ -233,19 +234,6 @@ int main(int argc, char* argv[])
             fprintf(stderr, "Error: Maximum number of commands is %d, you have introduced %d \n", MAX_COMMANDS, command_counter);
             continue;
         }
-
-        // SIGCHLD signal handler
-        signal(SIGCHLD, sigchldhandler);
-        
-        // Redirect error output if there is file in filev
-        if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
-            if (open_file(stdfd_backup, STDERR_FILENO) < 0) continue;
-        }   
-
-        // Redirect input if there is file in filev
-        if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
-            if (open_file(stdfd_backup, STDIN_FILENO) < 0) continue;
-        }
         
         // Execution of command or sequence of commands
         if (strcmp(argvv[0][0], "myhistory") == 0) {        // If command is myhistory
@@ -255,76 +243,83 @@ int main(int argc, char* argv[])
             mycalc(argvv[0]);
         }
         // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
-        else {        
-            // The process that has pid = 0 coordinates the command sequence
-            int pid = 0;
-            if (in_background) { 
-                if ((pid = fork()) != 0) {  
-                    signal(SIGCHLD, bg_sigchldhandler);
-                }
-            }
-            else if (command_counter) {
-                stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);    // Backup stdin
-            }
-            
-            if (pid == 0) {
-                int i = 0, pipe_pid[2];
-                while (i < command_counter - 1) {
-                    // Creates two fid for an unnamed pipe. 
-                    if (pipe(pipe_pid) < 0) {
-                        fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
-                        restore_stdfd(stdfd_backup);
-                        continue;
-                    }
-                
-                    // Child process
-                    if ((pid = fork()) == 0) {   
-                        // Output redirection
-                        close(STDOUT_FILENO);
-                        dup(pipe_pid[STDOUT_FILENO]);
-                        close(pipe_pid[STDOUT_FILENO]);
-                        close(pipe_pid[STDIN_FILENO]);
+        else {                    
+            // Redirect error output if there is file in filev
+            if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
+                if (open_file(stdfd_backup, STDERR_FILENO) < 0) continue;
+            }   
 
-                        // EXECUTE COMMAND
-                        execvp(argvv[i][0], argvv[i]);
-                        exit(errno);
-                    }
-                    
+            // Redirect input if there is file in filev
+            if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
+                if (open_file(stdfd_backup, STDIN_FILENO) < 0) continue;
+            }
+            else if (1 < command_counter) 
+                stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);    // Backup stdin
+            
+            // Forking and piping
+            int pid, pipe_pid[2], i = 0;
+            while (i < command_counter - 1) {
+                // Creates two fid for an unnamed pipe. 
+                if (pipe(pipe_pid) < 0) {
+                    fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
+                    restore_stdfd(stdfd_backup);
+                    continue;
+                }
+            
+                // Child process
+                if ((pid = fork()) == 0) {   
+                    // Output redirection
+                    close(STDOUT_FILENO);
+                    dup(pipe_pid[STDOUT_FILENO]);
+                    close(pipe_pid[STDOUT_FILENO]);
+                    close(pipe_pid[STDIN_FILENO]);
+
+                    // EXECUTE COMMAND
+                    execvp(argvv[i][0], argvv[i]);
+                    exit(errno);
+                }
+                else {
                     // Input redirection (parent process)
                     close(STDIN_FILENO);
                     dup(pipe_pid[STDIN_FILENO]);
                     close(pipe_pid[STDIN_FILENO]);
                     close(pipe_pid[STDOUT_FILENO]);
-
-                    i++;
                 }
-                
-                // Output redirection
-                if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
-                    if (open_file(stdfd_backup, STDOUT_FILENO) < 0) continue;
-                }
-                
-                if ((pid = fork()) == 0) {
-                    // EXECUTE COMMAND
-                    execvp(argvv[i][0], argvv[i]);
-                    exit(errno);
-                }
-                else if (in_background) {
-                    fprintf(stderr, "[%d]\n", pid);
-                
-                    if (wait(&status) == -1) 
-                        fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
-                    exit(errno);
-                }
-                else {
-                    if (wait(&status) == -1) 
-                        fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));                    
-                }
+                i++;
             }
-        }
 
-        // Restore file descriptor to default ones: stdin, stdout, stder
-        restore_stdfd(stdfd_backup);
+            // Redirect output if there is file in filev
+            if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
+                if (open_file(stdfd_backup, STDOUT_FILENO) < 0) continue;
+            }
+            
+            // if (!in_background) signal(SIGCHLD, fg_sigchldhandler);
+
+            // Last command of the sequence (or the only one)
+            if ((pid = fork()) == 0) {
+                // EXECUTE COMMAND
+                execvp(argvv[i][0], argvv[i]);
+                exit(errno);
+            }
+
+            // Restore file descriptor to default ones: stdin, stdout, stder
+            restore_stdfd(stdfd_backup);
+            
+            if (in_background) {
+                fprintf(stderr, "[%d]\n", pid);
+            
+                // if (wait(&status) == -1) 
+                //     fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
+                // exit(errno);
+            }
+            else {
+                // Block the shell and wait for the last child process to finish
+                waitpid(pid, &status, 0);
+            }
+
+            store_command(argvv, filev, in_background, &history[tail]);
+            tail = ++tail % 20;
+        }
        
         // Print command
         // esto creo q se borra pq es apoyo visual para el desarrollo del msh
@@ -335,36 +330,36 @@ int main(int argc, char* argv[])
 }
 
 /* mycalc */
-void mycalc(char *argv[]) {
+int mycalc(char *argv[]) {
     // Result in stderr
     // Error in stdout
 
     for (int i = 0; i < 4; i++) {
         if (argv[i] == NULL) {
             fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
-            return;
+            return -1;
         }
     }
 
     if (argv[4] != NULL) {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
-        return;
+        return -1;
     }
 
     long operand1, operand2, acc_l;
 
     // Conversion of <openrand_1> from str to long int using strtol (more secure)
-    if (my_strtol(argv[1], &operand1, "operand_1") < 0) return;
+    if (my_strtol(argv[1], &operand1, "operand_1") < 0) return -1;
 
 
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
-    if (my_strtol(argv[3], &operand2, "operand_2") < 0) return;
+    if (my_strtol(argv[3], &operand2, "operand_2") < 0) return -1;
 
 
     // Calculations
     if (strcmp(argv[2], "add") == 0) {
         // Conversion of Acc from str to long int using strtol (more secure)
-        if (my_strtol(getenv("Acc"), &acc_l, "acc") < 0) return;
+        if (my_strtol(getenv("Acc"), &acc_l, "acc") < 0) return -1;
 
         // sprintf() more secure than itoa() for conversion of: int -> str
         sprintf(acc_str, "%ld", acc_l += operand1 + operand2);
@@ -375,27 +370,35 @@ void mycalc(char *argv[]) {
         int res = operand1 * operand2;
         if (res / operand1 != operand2) {
             fprintf(stdout, "[ERROR] Overflow at multiplication\n");
-            return;
+            return -1;
         }
         fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, res);
     } 
     else if (strcmp(argv[2], "div") == 0) {
         if (operand2 == 0) {
             fprintf(stdout, "[ERROR] Division by zero is not allowed.\n");
-            return;
+            return -1;
         }
         fprintf(stderr, "[OK] %ld / %ld = %ld; Remainder %ld\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
     } 
     else {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
     }
+
+    return 0;
 }
 
 /* myhistory */
-void myhistory(char *argv[]) {
+int myhistory(char *argv[]) {
     if (argv[1] == NULL) {
         for (int i = 0; i < 20; i++) {
-            fprintf(stderr, "<%d> %s %s %s %s\n", i, history[i].args[0], history[i].args[1], history[i].args[2], history[i].args[3]);
+            if (history[i].argvv == NULL) break;
+
+            fprintf(stderr, "<%d> ", i, history[i].args[0]);
+            for (int ii = 0; ii < history[i].num_commands; ii++) {
+                fprintf(stderr, "%d ", history[i].args[ii]);
+            }
+            fprintf(stderr, "\n");
         }
     } else {
         int index = atoi(argv[1]);
@@ -404,7 +407,7 @@ void myhistory(char *argv[]) {
         if (index < 0 || index >= 20) {
             fprintf(stdout, "ERROR: Command not found\n");
         }
-         else {
+        else {
             fprintf(stderr, "Running command <%d>\n", index);
             char *args[4] = {NULL, NULL, NULL, NULL}; // Initialize all elements to NULL
             char arg0[12], arg1[12], arg2[12]; // Buffer to hold the string representation of the integers
@@ -423,30 +426,35 @@ void myhistory(char *argv[]) {
             mycalc(args);
         }
     }
+
+    return 0;
 }
 
 // To effectively kill the child process
 void sigchldhandler(int param)
 {
 	// printf("****  CHILD DEAD! **** \n");
-    signal(SIGCHLD, sigchldhandler);
-    return;  
-}
-
-// To effectively kill the child process
-void bg_sigchldhandler(int param)
-{
-	// printf("****  BG CHILD DEAD! **** \n");
-
-    /* Since SIGCHLD is only sent by inmmidiate children, it can be activated 
-    before forking the shell so that it can wait and kill the child process effectively */
     int status = 0;
-    if (wait(&status) == -1) 
-        fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno)); 
+    wait(&status);
 
     signal(SIGCHLD, sigchldhandler);
     return;
 }
+
+
+// // To effectively kill the child process
+// void fg_sigchldhandler(int param)
+// {
+// 	// printf("****  FG CHILD DEAD! **** \n");
+//     int status = 0;
+//     if (wait(&status) == -1) 
+//         fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno)); 
+    
+//     /* Since SIGCHLD is only sent by inmmidiate children, it can be activated 
+//     before forking the shell so that it can wait and kill the child process effectively */
+//     signal(SIGCHLD, fg_sigchldhandler);
+//     return;
+// }
 
 
 /* Error -1 otherwise 0 */
@@ -527,5 +535,10 @@ int open_file(int *stdfd_backup, int fileno) {
 
 
 
-
+// A lo mejor hay q cambiar todos los fprintf(stderr) por perror()
+// Each command must execute as an immediate child of the minishell, spawned by fork command (man 2 fork).
 // Si te apetece ponerle error control a los resultados de las operaciones. Good luck.
+
+
+
+// Incluido sigkill handler
