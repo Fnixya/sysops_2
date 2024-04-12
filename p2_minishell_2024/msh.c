@@ -430,6 +430,20 @@ int myhistory(char *argv[]) {
                 fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
             }
 
+            if (strcmp(curr_cmd.filev[STDIN_FILENO], "0") != 0) {
+                fprintf(stderr, "< %s ", curr_cmd.filev[STDIN_FILENO]);
+            }
+            
+            if (strcmp(curr_cmd.filev[STDOUT_FILENO], "0") != 0) {
+                fprintf(stderr, "> %s ", curr_cmd.filev[STDOUT_FILENO]);
+            }
+            
+            if (strcmp(curr_cmd.filev[STDERR_FILENO], "0") != 0) {
+                fprintf(stderr, "!> %s ", curr_cmd.filev[STDERR_FILENO]);
+            }
+
+            if (curr_cmd.in_background) fprintf(stderr, " &");
+
             fprintf(stderr, "\n");
         }
     } else {
