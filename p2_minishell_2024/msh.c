@@ -109,6 +109,7 @@ void store_command(char ***argvv, char filev[3][64], int in_background, struct c
         (*cmd).args[i] = args;
         (*cmd).argvv[i] = (char **) calloc((args+1) ,sizeof(char *));
         int j;
+
         for (j=0; j<args; j++)
         {
             (*cmd).argvv[i][j] = (char *)calloc(strlen(argvv[i][j]),sizeof(char));
@@ -140,6 +141,7 @@ void getCompleteCommand(char*** argvv, int num_command) {
 
 /* Our custom functions __________________________________ */
 
+int myshell(char*** argvv, int command_counter, int in_background);
 int mycalc(char *argv[]);
 int myhistory(char *argv[]);
 
@@ -237,90 +239,17 @@ int main(int argc, char* argv[])
         
         // Execution of command or sequence of commands
         if (strcmp(argvv[0][0], "myhistory") == 0) {        // If command is myhistory
-            myhistory(argvv[0]);
+            if (myhistory(argvv[0]) == 1) run_history = 1;
         }
         else if (strcmp(argvv[0][0], "mycalc") == 0) {      // If command is mycalc
             mycalc(argvv[0]);
         }
         // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
-        else {                    
-            // Redirect error output if there is file in filev
-            if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
-                if (open_file(stdfd_backup, STDERR_FILENO) < 0) continue;
-            }   
-
-            // Redirect input if there is file in filev
-            if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
-                if (open_file(stdfd_backup, STDIN_FILENO) < 0) continue;
-            }
-            else if (1 < command_counter) 
-                stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);    // Backup stdin
-            
-            // Forking and piping
-            int pid, pipe_pid[2], i = 0;
-            while (i < command_counter - 1) {
-                // Creates two fid for an unnamed pipe. 
-                if (pipe(pipe_pid) < 0) {
-                    fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
-                    restore_stdfd(stdfd_backup);
-                    continue;
-                }
-            
-                // Child process
-                if ((pid = fork()) == 0) {   
-                    // Output redirection
-                    close(STDOUT_FILENO);
-                    dup(pipe_pid[STDOUT_FILENO]);
-                    close(pipe_pid[STDOUT_FILENO]);
-                    close(pipe_pid[STDIN_FILENO]);
-
-                    // EXECUTE COMMAND
-                    execvp(argvv[i][0], argvv[i]);
-                    exit(errno);
-                }
-                else {
-                    // Input redirection (parent process)
-                    close(STDIN_FILENO);
-                    dup(pipe_pid[STDIN_FILENO]);
-                    close(pipe_pid[STDIN_FILENO]);
-                    close(pipe_pid[STDOUT_FILENO]);
-                }
-                i++;
-            }
-
-            // Redirect output if there is file in filev
-            if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
-                if (open_file(stdfd_backup, STDOUT_FILENO) < 0) continue;
-            }
-            
-            // if (!in_background) signal(SIGCHLD, fg_sigchldhandler);
-
-            // Last command of the sequence (or the only one)
-            if ((pid = fork()) == 0) {
-                // EXECUTE COMMAND
-                execvp(argvv[i][0], argvv[i]);
-                exit(errno);
-            }
-
-            // Restore file descriptor to default ones: stdin, stdout, stder
-            restore_stdfd(stdfd_backup);
-            
-            if (in_background) {
-                fprintf(stderr, "[%d]\n", pid);
-            
-                // if (wait(&status) == -1) 
-                //     fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
-                // exit(errno);
-            }
-            else {
-                // Block the shell and wait for the last child process to finish
-                waitpid(pid, &status, 0);
-            }
-
-            store_command(argvv, filev, in_background, &history[tail]);
-            tail = ++tail % 20;
+        else {      
+            myshell(argvv, command_counter, in_background);
         }
        
+
         // Print command
         // esto creo q se borra pq es apoyo visual para el desarrollo del msh
         // print_command(argvv, filev, in_background);
@@ -328,6 +257,96 @@ int main(int argc, char* argv[])
 	
 	return 0;
 }
+
+/* Executes all the sequence of commands */
+int myshell(char*** argvv, int command_counter, int in_background) {     
+    // Redirect error output if there is file in filev
+    if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
+        if (open_file(stdfd_backup, STDERR_FILENO) < 0) return -1;
+    }   
+
+    // Redirect input if there is file in filev
+    if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
+        if (open_file(stdfd_backup, STDIN_FILENO) < 0) return -1;
+    }
+    else if (1 < command_counter) 
+        stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);    // Backup stdin
+    
+    // Forking and piping
+    int pid, pipe_pid[2], i = 0, status = 0;
+    while (i < command_counter - 1) {
+        // Creates two fid for an unnamed pipe. 
+        if (pipe(pipe_pid) < 0) {
+            fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
+            restore_stdfd(stdfd_backup);
+            return -1;
+        }
+    
+        // Child process
+        if ((pid = fork()) == 0) {   
+            // Output redirection
+            close(STDOUT_FILENO);
+            dup(pipe_pid[STDOUT_FILENO]);
+            close(pipe_pid[STDOUT_FILENO]);
+            close(pipe_pid[STDIN_FILENO]);
+
+            // EXECUTE COMMAND
+            execvp(argvv[i][0], argvv[i]);
+            exit(errno);
+        }
+        else {
+            // Input redirection (parent process)
+            close(STDIN_FILENO);
+            dup(pipe_pid[STDIN_FILENO]);
+            close(pipe_pid[STDIN_FILENO]);
+            close(pipe_pid[STDOUT_FILENO]);
+        }
+        i++;
+    }
+
+    // Redirect output if there is file in filev
+    if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
+        if (open_file(stdfd_backup, STDOUT_FILENO) < 0) return -1;
+    }
+    
+    // if (!in_background) signal(SIGCHLD, fg_sigchldhandler);
+
+    // Last command of the sequence (or the only one)
+    if ((pid = fork()) == 0) {
+        // EXECUTE COMMAND
+        execvp(argvv[i][0], argvv[i]);
+        exit(errno);
+    }
+
+    // Restore file descriptor to default ones: stdin, stdout, stder
+    restore_stdfd(stdfd_backup);
+    
+    if (in_background) {
+        fprintf(stderr, "[%d]\n", pid);
+    
+        // if (wait(&status) == -1) 
+        //     fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
+        // exit(errno);
+    }
+    else {
+        // Block the shell and wait for the last child process to finish
+        waitpid(pid, &status, 0);
+    }
+
+    if (n_elem == 20) {
+        free_command(&history[head]);
+        store_command(argvv, filev, in_background, &history[tail]);
+        head = ++head % 20;
+        tail = head;
+    }
+    else {
+        store_command(argvv, filev, in_background, &history[tail]);
+        tail = ++tail % 20;
+        n_elem++;
+    }
+    return 0;
+}
+
 
 /* mycalc */
 int mycalc(char *argv[]) {
@@ -388,16 +407,29 @@ int mycalc(char *argv[]) {
     return 0;
 }
 
-/* myhistory */
+/***
+ *  @param argv[]: array of strings with the command
+ *  @return -1 if error, 0 if it prints history of commands, 1 if it runs a command from history
+***/
 int myhistory(char *argv[]) {
+    struct command curr_cmd;
     if (argv[1] == NULL) {
-        for (int i = 0; i < 20; i++) {
-            if (history[i].argvv == NULL) break;
+        int i, ii, iii;
+        for (i = 0; i < 20; i++) {
+            curr_cmd = history[(i+head)%20];
+            if (curr_cmd.argvv == NULL) break;
 
-            fprintf(stderr, "<%d> ", i, history[i].args[0]);
-            for (int ii = 0; ii < history[i].num_commands; ii++) {
-                fprintf(stderr, "%d ", history[i].args[ii]);
+            fprintf(stderr, "%d ", i);
+            for (ii = 0; ii < curr_cmd.num_commands-1; ii++) {
+                for (int iii = 0; iii < curr_cmd.args[ii]; iii++) {
+                    fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
+                }
+                fprintf(stderr, "| ");
+            }            
+            for (iii = 0; iii < curr_cmd.args[ii]; iii++) {
+                fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
             }
+
             fprintf(stderr, "\n");
         }
     } else {
@@ -542,3 +574,8 @@ int open_file(int *stdfd_backup, int fileno) {
 
 
 // Incluido sigkill handler
+
+
+
+// zip p2_minishell.zip msh.c authors.txt
+// ./checker_os_p2.sh p2_minishell.zip
