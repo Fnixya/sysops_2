@@ -144,13 +144,14 @@ void getCompleteCommand(char*** argvv, int num_command) {
 int myshell(char*** argvv, int command_counter, int in_background);
 int mycalc(char *argv[]);
 int myhistory(char *argv[]);
+void print_history();
 
 void sigchldhandler(int param);
 // void fg_sigchldhandler(int param);
 
 int my_strtol(char *string, long *number, const char* var);
 void restore_stdfd(int *stdfd_backup);
-int open_file(int *stdfd_backup, int fileno);
+int redirect(int *stdfd_backup, int fileno);
 
 /* Our custom global variables __________________________________ */
 
@@ -258,16 +259,22 @@ int main(int argc, char* argv[])
 	return 0;
 }
 
-/* Executes all the sequence of commands */
+/***
+ * Shell code
+ * @param ***argvv: array of all arguments of the command sequence
+ * @param command_counter: number of commands of ***argvv
+ * @param in_background: 1 if the command is executed in background, 0 if not
+ * @return -1 if error, 0 if successful
+ */
 int myshell(char*** argvv, int command_counter, int in_background) {     
     // Redirect error output if there is file in filev
     if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
-        if (open_file(stdfd_backup, STDERR_FILENO) < 0) return -1;
+        if (redirect(stdfd_backup, STDERR_FILENO) < 0) return -1;
     }   
 
     // Redirect input if there is file in filev
     if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
-        if (open_file(stdfd_backup, STDIN_FILENO) < 0) return -1;
+        if (redirect(stdfd_backup, STDIN_FILENO) < 0) return -1;
     }
     else if (1 < command_counter) 
         stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);    // Backup stdin
@@ -279,7 +286,7 @@ int myshell(char*** argvv, int command_counter, int in_background) {
         if (pipe(pipe_pid) < 0) {
             fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
             restore_stdfd(stdfd_backup);
-            return -1;
+            exit(-1);
         }
     
         // Child process
@@ -306,7 +313,7 @@ int myshell(char*** argvv, int command_counter, int in_background) {
 
     // Redirect output if there is file in filev
     if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
-        if (open_file(stdfd_backup, STDOUT_FILENO) < 0) return -1;
+        if (redirect(stdfd_backup, STDOUT_FILENO) < 0) return -1;
     }
     
     // if (!in_background) signal(SIGCHLD, fg_sigchldhandler);
@@ -348,7 +355,11 @@ int myshell(char*** argvv, int command_counter, int in_background) {
 }
 
 
-/* mycalc */
+/***
+ * Interal command that acts as a basic calculator
+ * @param *argv[]: array of arguments of the mycalc command
+ * @return -1 if error, 0 if successful
+ */
 int mycalc(char *argv[]) {
     // Result in stderr
     // Error in stdout
@@ -368,17 +379,15 @@ int mycalc(char *argv[]) {
     long operand1, operand2, acc_l;
 
     // Conversion of <openrand_1> from str to long int using strtol (more secure)
-    if (my_strtol(argv[1], &operand1, "operand_1") < 0) return -1;
-
+    if (my_strtol(argv[1], &operand1, "operand_1", 0) < 0) return -1;
 
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
-    if (my_strtol(argv[3], &operand2, "operand_2") < 0) return -1;
-
+    if (my_strtol(argv[3], &operand2, "operand_2", 0) < 0) return -1;
 
     // Calculations
     if (strcmp(argv[2], "add") == 0) {
         // Conversion of Acc from str to long int using strtol (more secure)
-        if (my_strtol(getenv("Acc"), &acc_l, "acc") < 0) return -1;
+        if (my_strtol(getenv("Acc"), &acc_l, "acc", 0) < 0) return -1;
 
         // sprintf() more secure than itoa() for conversion of: int -> str
         sprintf(acc_str, "%ld", acc_l += operand1 + operand2);
@@ -387,9 +396,11 @@ int mycalc(char *argv[]) {
     } 
     else if (strcmp(argv[2], "mul") == 0) {
         int res = operand1 * operand2;
-        if (res / operand1 != operand2) {
-            fprintf(stdout, "[ERROR] Overflow at multiplication\n");
-            return -1;
+        if (operand1 != 0) {
+            if (res / operand1 != operand2) {
+                fprintf(stdout, "[ERROR] Overflow at multiplication\n");
+                return -1;
+            }
         }
         fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, res);
     } 
@@ -408,50 +419,25 @@ int mycalc(char *argv[]) {
 }
 
 /***
- *  @param argv[]: array of strings with the command
+ *  @param *argv[]: array of arguments of a command
  *  @return -1 if error, 0 if it prints history of commands, 1 if it runs a command from history
 ***/
 int myhistory(char *argv[]) {
-    struct command curr_cmd;
     if (argv[1] == NULL) {
-        int i, ii, iii;
-        for (i = 0; i < 20; i++) {
-            curr_cmd = history[(i+head)%20];
-            if (curr_cmd.argvv == NULL) break;
-
-            fprintf(stderr, "%d ", i);
-            for (ii = 0; ii < curr_cmd.num_commands-1; ii++) {
-                for (int iii = 0; iii < curr_cmd.args[ii]; iii++) {
-                    fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
-                }
-                fprintf(stderr, "| ");
-            }            
-            for (iii = 0; iii < curr_cmd.args[ii]; iii++) {
-                fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
-            }
-
-            if (strcmp(curr_cmd.filev[STDIN_FILENO], "0") != 0) {
-                fprintf(stderr, "< %s ", curr_cmd.filev[STDIN_FILENO]);
-            }
-            
-            if (strcmp(curr_cmd.filev[STDOUT_FILENO], "0") != 0) {
-                fprintf(stderr, "> %s ", curr_cmd.filev[STDOUT_FILENO]);
-            }
-            
-            if (strcmp(curr_cmd.filev[STDERR_FILENO], "0") != 0) {
-                fprintf(stderr, "!> %s ", curr_cmd.filev[STDERR_FILENO]);
-            }
-
-            if (curr_cmd.in_background) fprintf(stderr, " &");
-
-            fprintf(stderr, "\n");
+        print_history();
+    } 
+    else if (argv[2] == NULL) {
+        int index;
+        if (my_strtol(argv[1], &index, "", 1) < 0) {
+            fprintf(stdout, "ERROR: Command not found\n");
+            return -1;
         }
-    } else {
-        int index = atoi(argv[1]);
-        // if (my_strtol(argv[1], &index, "index") < 0) return;
+
+        // int index = atoi(argv[1]);
 
         if (index < 0 || index >= 20) {
             fprintf(stdout, "ERROR: Command not found\n");
+            return -1
         }
         else {
             fprintf(stderr, "Running command <%d>\n", index);
@@ -472,11 +458,70 @@ int myhistory(char *argv[]) {
             mycalc(args);
         }
     }
+    else {
+        fprintf(stdout, "ERROR: Command not found\n");
+        return -1;
+    }
 
     return 0;
 }
 
-// To effectively kill the child process
+
+/*** 
+ * Prints the history of commands up to history_size 
+*/
+void print_history() {
+    int i, ii, iii;             // Iterators    
+    struct command curr_cmd;    // Command
+
+    for (i = 0; i < history_size; i++) {
+        curr_cmd = history[(i+head)%20];
+
+        // IF THERE ARE NO MORE COMMANDS IN HISTORY THEN STOP PRINTING
+        if (curr_cmd.argvv == NULL) break;
+
+        // PRINT COMMAND INDEX
+        fprintf(stderr, "%d ", i);
+
+        // PRINT COMMANDS
+        for (ii = 0; ii < curr_cmd.num_commands; ii++) {
+            for (int iii = 0; iii < curr_cmd.args[ii]; iii++) {
+                fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
+            }
+            fprintf(stderr, "| ");
+        }            
+        for (iii = 0; iii < curr_cmd.args[ii]; iii++) {
+            fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
+        }
+
+        // PRINT INPUT REDIRECTION
+        if (strcmp(curr_cmd.filev[STDIN_FILENO], "0") != 0) {
+            fprintf(stderr, "< %s ", curr_cmd.filev[STDIN_FILENO]);
+        }
+        
+        // PRINT OUTPUT REDIRECTION
+        if (strcmp(curr_cmd.filev[STDOUT_FILENO], "0") != 0) {
+            fprintf(stderr, "> %s ", curr_cmd.filev[STDOUT_FILENO]);
+        }
+        
+        // PRINT ERROR OUTPUT REDIRECTION
+        if (strcmp(curr_cmd.filev[STDERR_FILENO], "0") != 0) {
+            fprintf(stderr, "!> %s ", curr_cmd.filev[STDERR_FILENO]);
+        }
+
+        // PRINT BACKGROUND
+        if (curr_cmd.in_background) fprintf(stderr, " &");
+
+        fprintf(stderr, "\n");
+    }
+
+    return;
+}
+
+
+/*** 
+ * Signal handler for SIGCHLD, which waits for all child processes that finished
+*/
 void sigchldhandler(int param)
 {
 	// printf("****  CHILD DEAD! **** \n");
@@ -503,8 +548,13 @@ void sigchldhandler(int param)
 // }
 
 
-/* Error -1 otherwise 0 */
-int my_strtol(char *string, long *number, const char* var) {
+/***
+ * @param string: string to convert to long
+ * @param number: pointer to store the result
+ * @param var: variable name (used to print error message)
+ * @param mode: 0 to print error message, otherwise it does not print error message 
+ * @return Error -1 otherwise 0 */
+int my_strtol(char *string, long *number, const char* var, int mode) {
     // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
     char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
     
@@ -513,17 +563,20 @@ int my_strtol(char *string, long *number, const char* var) {
     errno = 0;
     *number = strtol(nptr, &endptr, 10);
     if (nptr && *endptr != 0) {
-        fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
+        if (mode == 0)
+            fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
         return -1;
     }
     else if (errno == ERANGE && *number == LONG_MAX)
     {
-        fprintf(stdout, "[ERROR] Overflow at <%s>\n", var);
+        if (mode == 0)
+            fprintf(stdout, "[ERROR] Overflow at <%s>\n", var);
         return -1;
     }
     else if (errno == ERANGE && *number == LONG_MIN)
     {
-        fprintf(stdout, "[ERROR] Underflow at <%s>\n", var);
+        if (mode == 0)
+            fprintf(stdout, "[ERROR] Underflow at <%s>\n", var);
         return -1;
     }
 
@@ -532,7 +585,10 @@ int my_strtol(char *string, long *number, const char* var) {
 
 
 
-/* This function restores all  */
+/***
+ * It restores all file descriptors to their default values: stdin, stdout, stderr
+ * @param stdfd_backup: array that stores the backup of all the standard file descriptors: stdin, stdout, stderr
+*/
 void restore_stdfd(int *stdfd_backup) {
     for (int i = 0; i < 3; i++) {
         if (stdfd_backup[i] != 0) {
@@ -544,8 +600,12 @@ void restore_stdfd(int *stdfd_backup) {
     }
 }
 
-// Redirection of file descriptors
-int open_file(int *stdfd_backup, int fileno) {
+/***
+ * It redirects the input/output to filev[fileno] and makes a backup of the stdfd
+ * @param stdfd_backup: array that stores the backup of all the standard file descriptors: stdin, stdout, stderr.
+ * @param fileno: file number to redirect: STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO
+*/
+int redirect(int *stdfd_backup, int fileno) {
     int filev_fd;
     switch (fileno) {
         case STDIN_FILENO:
@@ -569,6 +629,9 @@ int open_file(int *stdfd_backup, int fileno) {
                 return filev_fd;
             } 
             break;
+        default:
+            return;
+            break;
     }
 
     stdfd_backup[fileno] = dup(fileno);                            
@@ -582,12 +645,17 @@ int open_file(int *stdfd_backup, int fileno) {
 
 
 // A lo mejor hay q cambiar todos los fprintf(stderr) por perror()
+// hay q reportar el error si wait(&status) == -1
+
+
 // Each command must execute as an immediate child of the minishell, spawned by fork command (man 2 fork).
 // Si te apetece ponerle error control a los resultados de las operaciones. Good luck.
 
 
+// Implementa error control para cuando un pipe, redireccion de error (con dup y close) entonces 
+// diagnosticarlo 
 
-// Incluido sigkill handler
+
 
 
 
