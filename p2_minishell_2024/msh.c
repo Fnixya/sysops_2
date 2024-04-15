@@ -149,7 +149,8 @@ void print_history();
 void sigchldhandler(int param);
 // void fg_sigchldhandler(int param);
 
-int my_strtol(char *string, long *number, const char* var);
+int my_strtol(char *string, long *number, const char* var, int mode);
+int my_strtol_index(char *string, long *number, const char* var);
 void restore_stdfd(int *stdfd_backup);
 int redirect(int *stdfd_backup, int fileno);
 
@@ -259,6 +260,14 @@ int main(int argc, char* argv[])
 	return 0;
 }
 
+
+
+
+
+
+
+
+
 /***
  * Shell code
  * @param ***argvv: array of all arguments of the command sequence
@@ -273,7 +282,7 @@ int myshell(char*** argvv, int command_counter, int in_background) {
     }   
 
     // Redirect input if there is file in filev
-    if (strcmp(filev[STDIN_FILENO], "0") != 0) {     // Redirect if entry of filev is not "0"
+    if (strcmp(filev[STDIN_FILENO], "0") != 0) {     
         if (redirect(stdfd_backup, STDIN_FILENO) < 0) return -1;
     }
     else if (1 < command_counter) 
@@ -286,7 +295,7 @@ int myshell(char*** argvv, int command_counter, int in_background) {
         if (pipe(pipe_pid) < 0) {
             fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
             restore_stdfd(stdfd_backup);
-            exit(-1);
+            return -1;
         }
     
         // Child process
@@ -298,8 +307,9 @@ int myshell(char*** argvv, int command_counter, int in_background) {
             close(pipe_pid[STDIN_FILENO]);
 
             // EXECUTE COMMAND
-            execvp(argvv[i][0], argvv[i]);
-            exit(errno);
+            if (execvp(argvv[i][0], argvv[i]) == -1) {
+                exit(errno);
+            }
         }
         else {
             // Input redirection (parent process)
@@ -321,16 +331,17 @@ int myshell(char*** argvv, int command_counter, int in_background) {
     // Last command of the sequence (or the only one)
     if ((pid = fork()) == 0) {
         // EXECUTE COMMAND
-        execvp(argvv[i][0], argvv[i]);
-        exit(errno);
+        if (execvp(argvv[i][0], argvv[i]) == -1) {
+            exit(errno);
+        }
     }
 
-    // Restore file descriptor to default ones: stdin, stdout, stder
+    // Restore file descriptor to default ones: stdin, stdout, stderr
     restore_stdfd(stdfd_backup);
     
     if (in_background) {
         fprintf(stderr, "[%d]\n", pid);
-    
+
         // if (wait(&status) == -1) 
         //     fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
         // exit(errno);
@@ -353,6 +364,73 @@ int myshell(char*** argvv, int command_counter, int in_background) {
     }
     return 0;
 }
+
+
+/***
+ *  @param argv[]: array of strings with the command
+ *  @return -1 if error, 0 if it prints history of commands, 1 if it runs a command from history
+***/
+int myhistory(char *argv[]) {
+    struct command curr_cmd;
+    if (argv[1] == NULL) {
+        int i, ii, iii;
+        for (i = 0; i < 20; i++) {
+            curr_cmd = history[(i+head)%20];
+            if (curr_cmd.argvv == NULL) break;
+
+            fprintf(stderr, "%d ", i);
+            for (ii = 0; ii < curr_cmd.num_commands-1; ii++) {
+                for (int iii = 0; iii < curr_cmd.args[ii]; iii++) {
+                    fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
+                }
+                fprintf(stderr, "| ");
+            }            
+            for (iii = 0; iii < curr_cmd.args[ii]; iii++) {
+                fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
+            }
+
+            if (strcmp(curr_cmd.filev[STDIN_FILENO], "0") != 0) {
+                fprintf(stderr, "< %s ", curr_cmd.filev[STDIN_FILENO]);
+            }
+            
+            if (strcmp(curr_cmd.filev[STDOUT_FILENO], "0") != 0) {
+                fprintf(stderr, "> %s ", curr_cmd.filev[STDOUT_FILENO]);
+            }
+            
+            if (strcmp(curr_cmd.filev[STDERR_FILENO], "0") != 0) {
+                fprintf(stderr, "!> %s ", curr_cmd.filev[STDERR_FILENO]);
+            }
+
+            if (curr_cmd.in_background) fprintf(stderr, " &");
+
+            fprintf(stderr, "\n");
+        }    } else {
+        long int index = atoi(argv[1]);
+        if (my_strtol_index(argv[1], &index, "index") < 0) {
+            fprintf(stderr, "ERROR CONVERTING");
+            return -1;
+        }
+        if (index < 0 || index >= 20 || history[index].argvv == NULL) {
+            fprintf(stdout, "ERROR: Command not found\n");
+            return -1;
+        }
+        else {
+            fprintf(stderr, "Running command <%ld>\n", index);
+            if (history[index].argvv == NULL) {
+                fprintf(stderr, "ERROR: Command resources have been freed\n");
+                return -1;
+            }
+            char ***argvv_execvp = history[index].argvv; // Get all commands of the piped sequence from history
+            if (myshell(argvv_execvp, history[index].num_commands, history[index].in_background) < 0) {
+                fprintf(stderr, "ERROR: Failed to execute command\n");
+                return -1;
+            }
+        }
+
+    }
+    return 0;
+}
+
 
 
 /***
@@ -381,8 +459,10 @@ int mycalc(char *argv[]) {
     // Conversion of <openrand_1> from str to long int using strtol (more secure)
     if (my_strtol(argv[1], &operand1, "operand_1", 0) < 0) return -1;
 
+
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
     if (my_strtol(argv[3], &operand2, "operand_2", 0) < 0) return -1;
+
 
     // Calculations
     if (strcmp(argv[2], "add") == 0) {
@@ -396,11 +476,9 @@ int mycalc(char *argv[]) {
     } 
     else if (strcmp(argv[2], "mul") == 0) {
         int res = operand1 * operand2;
-        if (operand1 != 0) {
-            if (res / operand1 != operand2) {
-                fprintf(stdout, "[ERROR] Overflow at multiplication\n");
-                return -1;
-            }
+        if (res / operand1 != operand2) {
+            fprintf(stdout, "[ERROR] Overflow at multiplication\n");
+            return -1;
         }
         fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, res);
     } 
@@ -418,105 +496,8 @@ int mycalc(char *argv[]) {
     return 0;
 }
 
-/***
- *  @param *argv[]: array of arguments of a command
- *  @return -1 if error, 0 if it prints history of commands, 1 if it runs a command from history
-***/
-int myhistory(char *argv[]) {
-    if (argv[1] == NULL) {
-        print_history();
-    } 
-    else if (argv[2] == NULL) {
-        int index;
-        if (my_strtol(argv[1], &index, "", 1) < 0) {
-            fprintf(stdout, "ERROR: Command not found\n");
-            return -1;
-        }
-
-        // int index = atoi(argv[1]);
-
-        if (index < 0 || index >= 20) {
-            fprintf(stdout, "ERROR: Command not found\n");
-            return -1
-        }
-        else {
-            fprintf(stderr, "Running command <%d>\n", index);
-            char *args[4] = {NULL, NULL, NULL, NULL}; // Initialize all elements to NULL
-            char arg0[12], arg1[12], arg2[12]; // Buffer to hold the string representation of the integers
-            if (history[index].args[0] != 0) {
-                sprintf(arg0, "%s", history[index].args[0]);
-                args[0] = arg0;
-            }
-            if (history[index].args[1] != 0) {
-                sprintf(arg1, "%s", history[index].args[1]);
-                args[1] = arg1;
-            }
-            if (history[index].args[2] != 0) {
-                sprintf(arg2, "%s", history[index].args[2]);
-                args[2] = arg2;
-            }
-            mycalc(args);
-        }
-    }
-    else {
-        fprintf(stdout, "ERROR: Command not found\n");
-        return -1;
-    }
-
-    return 0;
-}
 
 
-/*** 
- * Prints the history of commands up to history_size 
-*/
-void print_history() {
-    int i, ii, iii;             // Iterators    
-    struct command curr_cmd;    // Command
-
-    for (i = 0; i < history_size; i++) {
-        curr_cmd = history[(i+head)%20];
-
-        // IF THERE ARE NO MORE COMMANDS IN HISTORY THEN STOP PRINTING
-        if (curr_cmd.argvv == NULL) break;
-
-        // PRINT COMMAND INDEX
-        fprintf(stderr, "%d ", i);
-
-        // PRINT COMMANDS
-        for (ii = 0; ii < curr_cmd.num_commands; ii++) {
-            for (int iii = 0; iii < curr_cmd.args[ii]; iii++) {
-                fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
-            }
-            fprintf(stderr, "| ");
-        }            
-        for (iii = 0; iii < curr_cmd.args[ii]; iii++) {
-            fprintf(stderr, "%s ", curr_cmd.argvv[ii][iii]);
-        }
-
-        // PRINT INPUT REDIRECTION
-        if (strcmp(curr_cmd.filev[STDIN_FILENO], "0") != 0) {
-            fprintf(stderr, "< %s ", curr_cmd.filev[STDIN_FILENO]);
-        }
-        
-        // PRINT OUTPUT REDIRECTION
-        if (strcmp(curr_cmd.filev[STDOUT_FILENO], "0") != 0) {
-            fprintf(stderr, "> %s ", curr_cmd.filev[STDOUT_FILENO]);
-        }
-        
-        // PRINT ERROR OUTPUT REDIRECTION
-        if (strcmp(curr_cmd.filev[STDERR_FILENO], "0") != 0) {
-            fprintf(stderr, "!> %s ", curr_cmd.filev[STDERR_FILENO]);
-        }
-
-        // PRINT BACKGROUND
-        if (curr_cmd.in_background) fprintf(stderr, " &");
-
-        fprintf(stderr, "\n");
-    }
-
-    return;
-}
 
 
 /*** 
@@ -583,7 +564,31 @@ int my_strtol(char *string, long *number, const char* var, int mode) {
     return 0;
 }
 
+/* Error -1 otherwise 0 */
+int my_strtol_index(char *string, long *number, const char* var) {
+    char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
+    
+    nptr = string;
+    endptr = NULL;
+    errno = 0;
+    *number = strtol(nptr, &endptr, 10);
+    if (nptr && *endptr != 0) {
+        fprintf(stdout, "[ERROR] Invalid index for myhistory command\n");
+        return -1;
+    }
+    else if (errno == ERANGE && *number == LONG_MAX)
+    {
+        fprintf(stdout, "[ERROR] Overflow at <%s>\n", var);
+        return -1;
+    }
+    else if (errno == ERANGE && *number == LONG_MIN)
+    {
+        fprintf(stdout, "[ERROR] Underflow at <%s>\n", var);
+        return -1;
+    }
 
+    return 0;
+}
 
 /***
  * It restores all file descriptors to their default values: stdin, stdout, stderr
@@ -630,7 +635,7 @@ int redirect(int *stdfd_backup, int fileno) {
             } 
             break;
         default:
-            return;
+            return 0;
             break;
     }
 
@@ -644,18 +649,14 @@ int redirect(int *stdfd_backup, int fileno) {
 
 
 
+
 // A lo mejor hay q cambiar todos los fprintf(stderr) por perror()
-// hay q reportar el error si wait(&status) == -1
-
-
 // Each command must execute as an immediate child of the minishell, spawned by fork command (man 2 fork).
 // Si te apetece ponerle error control a los resultados de las operaciones. Good luck.
 
 
-// Implementa error control para cuando un pipe, redireccion de error (con dup y close) entonces 
-// diagnosticarlo 
 
-
+// Incluido sigkill handler
 
 
 
