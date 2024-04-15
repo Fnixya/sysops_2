@@ -14,8 +14,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <errno.h>      // errno
-#include <limits.h>      // for overflow and underflow
+#include <errno.h>          // errno
+#include <limits.h>         // for overflow and underflow
 
 #include <sys/wait.h>
 #include <signal.h>
@@ -245,14 +245,12 @@ int main(int argc, char* argv[])
         else if (strcmp(argvv[0][0], "mycalc") == 0) {      // If command is mycalc
             mycalc(argvv[0]);
         }
-        // If command is any other than myhistory or mycalc -> then it is executed by execvp on a child process
+        // If command is any other than myhistory or mycalc -> then it is executed by execvp()
         else {      
             myshell(argvv, command_counter, in_background);
         }
-       
 
         // Print command
-        // esto creo q se borra pq es apoyo visual para el desarrollo del msh
         // print_command(argvv, filev, in_background);
 	}
 	
@@ -277,16 +275,17 @@ int myshell(char*** argvv, int command_counter, int in_background) {
         if (redirect(stdfd_backup, STDIN_FILENO) < 0) return -1;
     }
     else if (1 < command_counter) 
-        stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);    // Backup stdin
+        // Make a backup of stdin if there are no input redirections and there are more than one command (because of pipes)
+        stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);
     
-    // Forking and piping
+    // Forks and pipes for each pair of consecutive commands in the sequence
     int pid, pipe_pid[2], i = 0, status = 0;
     while (i < command_counter - 1) {
-        // Creates two fid for an unnamed pipe. 
+        // Creates two pid for an unnamed pipe. 
         if (pipe(pipe_pid) < 0) {
             fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
             restore_stdfd(stdfd_backup);
-            exit(-1);
+            exit(errno);
         }
     
         // Child process
@@ -316,9 +315,7 @@ int myshell(char*** argvv, int command_counter, int in_background) {
         if (redirect(stdfd_backup, STDOUT_FILENO) < 0) return -1;
     }
     
-    // if (!in_background) signal(SIGCHLD, fg_sigchldhandler);
-
-    // Last command of the sequence (or the only one)
+    // Exec the last command of the sequence (or the only one)
     if ((pid = fork()) == 0) {
         // EXECUTE COMMAND
         execvp(argvv[i][0], argvv[i]);
@@ -328,29 +325,31 @@ int myshell(char*** argvv, int command_counter, int in_background) {
     // Restore file descriptor to default ones: stdin, stdout, stder
     restore_stdfd(stdfd_backup);
     
-    if (in_background) {
+    if (in_background)
+        // Prints the pid of the last command in the sequence if in background 
         fprintf(stderr, "[%d]\n", pid);
-    
-        // if (wait(&status) == -1) 
-        //     fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
-        // exit(errno);
-    }
-    else {
-        // Block the shell and wait for the last child process to finish
+    else
+        /* If it is in foreground then
+            block the msh and wait for the last child process to finish */
         waitpid(pid, &status, 0);
-    }
 
+    // Store command in history
     if (n_elem == 20) {
+        /* If history is full then free the oldest command, 
+        store the new one in the same memory space and move the head and tail */
         free_command(&history[head]);
         store_command(argvv, filev, in_background, &history[tail]);
         head = ++head % 20;
         tail = head;
     }
     else {
+        /* If history is not full then just 
+        store it in the next available memory space */
         store_command(argvv, filev, in_background, &history[tail]);
         tail = ++tail % 20;
         n_elem++;
     }
+     
     return 0;
 }
 
@@ -361,16 +360,13 @@ int myshell(char*** argvv, int command_counter, int in_background) {
  * @return -1 if error, 0 if successful
  */
 int mycalc(char *argv[]) {
-    // Result in stderr
-    // Error in stdout
-
+    // Check if the command has the correct structure
     for (int i = 0; i < 4; i++) {
         if (argv[i] == NULL) {
             fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
             return -1;
         }
     }
-
     if (argv[4] != NULL) {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
         return -1;
@@ -384,7 +380,7 @@ int mycalc(char *argv[]) {
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
     if (my_strtol(argv[3], &operand2, "operand_2", 0) < 0) return -1;
 
-    // Calculations
+    // Addition
     if (strcmp(argv[2], "add") == 0) {
         // Conversion of Acc from str to long int using strtol (more secure)
         if (my_strtol(getenv("Acc"), &acc_l, "acc", 0) < 0) return -1;
@@ -394,8 +390,11 @@ int mycalc(char *argv[]) {
         setenv("Acc", acc_str, 1);
         fprintf(stderr, "[OK] %ld + %ld = %ld; Acc %ld\n", operand1, operand2, operand1 + operand2, acc_l);
     } 
+    // Multiplication
     else if (strcmp(argv[2], "mul") == 0) {
         int res = operand1 * operand2;
+
+        // Check for math errors (overflow or underflow)
         if (operand1 != 0) {
             if (res / operand1 != operand2) {
                 fprintf(stdout, "[ERROR] Overflow at multiplication\n");
@@ -404,13 +403,16 @@ int mycalc(char *argv[]) {
         }
         fprintf(stderr, "[OK] %ld * %ld = %ld\n", operand1, operand2, res);
     } 
+    // Division
     else if (strcmp(argv[2], "div") == 0) {
+        // Check for division errors
         if (operand2 == 0) {
             fprintf(stdout, "[ERROR] Division by zero is not allowed.\n");
             return -1;
         }
         fprintf(stderr, "[OK] %ld / %ld = %ld; Remainder %ld\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
     } 
+    // Error
     else {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
     }
@@ -419,6 +421,7 @@ int mycalc(char *argv[]) {
 }
 
 /***
+ * Internal command myhistory
  *  @param *argv[]: array of arguments of a command
  *  @return -1 if error, 0 if it prints history of commands, 1 if it runs a command from history
 ***/
@@ -427,12 +430,12 @@ int myhistory(char *argv[]) {
         print_history();
     } 
     else if (argv[2] == NULL) {
+        // Conversion of command index from char* to int, aborts command if conversion fails
         int index;
         if (my_strtol(argv[1], &index, "", 1) < 0) {
             fprintf(stdout, "ERROR: Command not found\n");
             return -1;
         }
-
         // int index = atoi(argv[1]);
 
         if (index < 0 || index >= 20) {
