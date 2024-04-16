@@ -6,7 +6,7 @@
 //#include "parser.h"
 #include <stddef.h>			/* NULL */
 #include <sys/types.h>
-#include <sys/stat.h>
+#include <sys/stat.h>       
 #include <fcntl.h>
 #include <wait.h>
 #include <stdio.h>
@@ -15,10 +15,10 @@
 #include <unistd.h>
 
 #include <errno.h>          // errno
-#include <limits.h>         // for overflow and underflow
+#include <limits.h>         // LONG_MIN and LONG_MAX for overflow and underflow
 
 #include <sys/wait.h>
-#include <signal.h>
+#include <signal.h>         
 
 #define MAX_COMMANDS 8
 
@@ -139,25 +139,23 @@ void getCompleteCommand(char*** argvv, int num_command) {
 
 
 
-/* Our custom functions __________________________________ */
+/* Our custom functions _________________________________________ */
 
-int myshell(char*** argvv, int command_counter, int in_background, int flag_history);
+int myshell(char*** argvv, int command_counter, int in_background);
 int mycalc(char *argv[]);
-int myhistory(char *argv[]);
-void print_history();
+int run_command(char ***argvv, int command_counter, int in_background);
+
+int myhistory(char ***argvv);
 
 void sigchldhandler(int param);
-// void fg_sigchldhandler(int param);
 
-int my_strtol_mycalc(char *string, long *number, const char* var, int mode);
-int my_strtol_index(char *string, long *number, const char* var);
-void restore_stdfd(int *stdfd_backup);
-int redirect(int *stdfd_backup, int fileno);
+int redirect_to_file(int fileno);
+void print_history();
+int my_strtol(char *string, long *number, const char* var, int mode);
 
 /* Our custom global variables __________________________________ */
 
-int stdfd_backup[3] = {0};  // Array to store the backup of the main file descriptors: stdin, stdout, stderr. Initialized to zero
-char acc_str[11];
+char acc_str[19];           // MAX 9,223,372,036,854,775,807
 
 /* _______________________________________________________ */
 
@@ -231,7 +229,7 @@ int main(int argc, char* argv[])
 
 
 		/************************ STUDENTS CODE ********************************/
-      
+
         if (command_counter < 1) continue;          //  Guardian clause to filter out empty entries
 
         if (command_counter > MAX_COMMANDS) {       //  Guardian clause to filter out a command sequence with excessive number of commands
@@ -241,17 +239,30 @@ int main(int argc, char* argv[])
         
         // Execution of command or sequence of commands
         if (strcmp(argvv[0][0], "myhistory") == 0) {        // If command is myhistory
-            myhistory(argvv[0]);
+            myhistory(argvv);
         }
-        else if (strcmp(argvv[0][0], "mycalc") == 0) {      // If command is mycalc
-            mycalc(argvv[0]);
-        }
-        // If command is any other than myhistory or mycalc -> then it is executed by execvp()
-        else {      
-            myshell(argvv, command_counter, in_background, 0);
+        else {
+            // Store command in history
+            if (n_elem == 20) {
+                /* If history is full then free the oldest command, 
+                store the new one in the same memory space and move the head and tail */
+                free_command(&history[head]);
+                store_command(argvv, filev, in_background, &history[tail]);
+                head = ++head % 20;
+                tail = head;
+            }
+            else {
+                /* If history is not full then just 
+                store it in the next available memory space */
+                store_command(argvv, filev, in_background, &history[tail]);
+                tail = ++tail % 20;
+                n_elem++;
+            }
+            
+            run_command(argvv, command_counter, in_background);
         }
 
-        // print_command(argvv, filev, in_background);
+        print_command(argvv, filev, in_background);
 	}
 	
 	return 0;
@@ -265,70 +276,97 @@ int main(int argc, char* argv[])
  * @param ***argvv: array of all arguments of the command sequence
  * @param command_counter: number of commands of ***argvv
  * @param in_background: 1 if the command is executed in background, 0 if not
+ * @param from_history: 1 if the command is extracted from history, 0 if it is read from the terminal
  * @return -1 if error, 0 if successful
  */
-int myshell(char*** argvv, int command_counter, int in_background, int from_history) {     
-    // Redirect error output if there is file in filev
-    if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
-        if (redirect(stdfd_backup, STDERR_FILENO) < 0) return -1;
-    }   
-
-    // Redirect input if there is file in filev
-    if (strcmp(filev[STDIN_FILENO], "0") != 0) {     
-        if (redirect(stdfd_backup, STDIN_FILENO) < 0) return -1;
-    }
-    else if (1 < command_counter) 
-        // Make a backup of stdin if there are no input redirections and there are more than one command (because of pipes)
-        stdfd_backup[STDIN_FILENO] = dup(STDIN_FILENO);
-    
+int myshell(char*** argvv, int command_counter, int in_background) {         
     // Forks and pipes for each pair of consecutive commands in the sequence
-    int pid, pipe_pid[2], i = 0, status = 0;
-    while (i < command_counter - 1) {
+    int pid, pipe_fd[2], pipe_in, pipe_out, i = 0, status = 0;
+    while (i < command_counter) {
         // Creates two pid for an unnamed pipe. 
-        if (pipe(pipe_pid) < 0) {
-            fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
-            restore_stdfd(stdfd_backup);
-            exit(errno);
+        if (i < command_counter - 1) {
+            if (pipe(pipe_fd) < 0) {
+                fprintf(stderr, "Error creating pipe: %s\n", strerror(errno));
+                exit(errno);
+            }
+
+            pipe_out = pipe_fd[STDOUT_FILENO];
         }
     
         // Child process
         if ((pid = fork()) == 0) {   
+            // Redirect error output if there is file in filev
+            if (strcmp(filev[STDERR_FILENO], "0") != 0) {     
+                if (redirect_to_file(STDERR_FILENO) < 0) return -1;
+            }
+
+            // Input redirection
+            if (i == 0) {
+                // Redirect input if there is file in filev
+                if (strcmp(filev[STDIN_FILENO], "0") != 0) {     
+                    if (redirect_to_file(STDIN_FILENO) < 0) return -1;
+                }
+            }
+            else {       
+                // Input redirection (parent process)
+                if (close(STDIN_FILENO) < 0) {
+                    fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+                    exit(errno);
+                }
+                if (dup(pipe_in) < 0) {
+                    fprintf(stderr, "Error duplicating file pointer: %s\n", strerror(errno));
+                    exit(errno);
+                }
+                if (close(pipe_in) < 0) {
+                    fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+                    exit(errno);
+                }
+            }
+
             // Output redirection
-            close(STDOUT_FILENO);
-            dup(pipe_pid[STDOUT_FILENO]);
-            close(pipe_pid[STDOUT_FILENO]);
-            close(pipe_pid[STDIN_FILENO]);
+            if (i == command_counter - 1) {
+                // Redirect output if there is file in filev
+                if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
+                    if (redirect_to_file(STDOUT_FILENO) < 0) return -1;
+                }
+            }
+            else {
+                // Redirect output to unnamed pipe
+                if (close(STDOUT_FILENO) < 0) {
+                    fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+                    exit(errno);
+                }
+                if (dup(pipe_out) < 0) {
+                    fprintf(stderr, "Error duplicating file pointer: %s\n", strerror(errno));
+                    exit(errno);
+                }
+                if (close(pipe_out) < 0) {
+                    fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+                    exit(errno);
+                }
+            }
 
             // EXECUTE COMMAND
             if (execvp(argvv[i][0], argvv[i]) == -1) {
                 exit(errno);
             }
         }
-        else {
-            // Input redirection (parent process)
-            close(STDIN_FILENO);
-            dup(pipe_pid[STDIN_FILENO]);
-            close(pipe_pid[STDIN_FILENO]);
-            close(pipe_pid[STDOUT_FILENO]);
+
+        if (i != command_counter - 1) {
+            if (close(pipe_out) < 0) {
+                fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+                exit(errno);
+            }
         }
+        if (i != 0) {
+            if (close(pipe_in) < 0) {
+                fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+                exit(errno);
+            }
+        }
+        pipe_in = pipe_fd[STDIN_FILENO];        
         i++;
     }
-
-    // Redirect output if there is file in filev
-    if (strcmp(filev[STDOUT_FILENO], "0") != 0) {
-        if (redirect(stdfd_backup, STDOUT_FILENO) < 0) return -1;
-    }
-    
-    // Exec the last command of the sequence (or the only one)
-    if ((pid = fork()) == 0) {
-        // EXECUTE COMMAND
-        if (execvp(argvv[i][0], argvv[i]) == -1) {
-            exit(errno);
-        }
-    }
-
-    // Restore file descriptor to default ones: stdin, stdout, stderr
-    restore_stdfd(stdfd_backup);
     
     if (in_background)
         // Prints the pid of the last command in the sequence if in background 
@@ -337,66 +375,9 @@ int myshell(char*** argvv, int command_counter, int in_background, int from_hist
         /* If it is in foreground then
             block the msh and wait for the last child process to finish */
         waitpid(pid, &status, 0);
-
-    // Store command in history (only if the command wasn't from history)
-    if (from_history == 0) {
-        if (n_elem == 20) {
-            /* If history is full then free the oldest command, 
-            store the new one in the same memory space and move the head and tail */
-            free_command(&history[head]);
-            store_command(argvv, filev, in_background, &history[tail]);
-            head = ++head % 20;
-            tail = head;
-        }
-        else {
-            /* If history is not full then just 
-            store it in the next available memory space */
-            store_command(argvv, filev, in_background, &history[tail]);
-            tail = ++tail % 20;
-            n_elem++;
-        }
-    }
      
     return 0;
 }
-
-
-// /***
-//  *  @param argv[]: array of strings with the command
-//  *  @return -1 if error, 0 if it prints history of commands, 1 if it runs a command from history
-// ***/
-// int myhihistory(char *argv[], int k) {
-//     struct command curr_cmd;
-//     if (argv[1] == NULL) {
-//         print_history();
-//     } 
-//     else {
-//         long int index = atoi(argv[1]);
-//         if (my_strtol_index(argv[1], &index, "index") < 0) {
-//             fprintf(stderr, "ERROR CONVERTING");
-//             return -1;
-//         }
-//         if (index < 0 || index >= 20 || history[index].argvv == NULL) {
-//             fprintf(stdout, "ERROR: Command not found\n");
-//             return -1;
-//         }
-//         else {
-//             fprintf(stderr, "Running command <%ld>\n", index);
-//             if (history[index].argvv == NULL) {
-//                 fprintf(stderr, "ERROR: Command resources have been freed\n");
-//                 return -1;
-//             }
-//             char ***argvv_execvp = history[index].argvv; // Get all commands of the piped sequence from history
-//             if (myshell(argvv_execvp, history[index].num_commands, history[index].in_background) < 0) {
-//                 fprintf(stderr, "ERROR: Failed to execute command\n");
-//                 return -1;
-//             }
-//         }
-
-//     }
-//     return 0;
-// }
-
 
 
 /***
@@ -420,16 +401,16 @@ int mycalc(char *argv[]) {
     long operand1, operand2, acc_l;
 
     // Conversion of <openrand_1> from str to long int using strtol (more secure)
-    if (my_strtol_mycalc(argv[1], &operand1, "operand_1", 0) < 0) return -1;
+    if (my_strtol(argv[1], &operand1, "operand_1", 0) < 0) return -1;
 
 
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
-    if (my_strtol_mycalc(argv[3], &operand2, "operand_2", 0) < 0) return -1;
+    if (my_strtol(argv[3], &operand2, "operand_2", 0) < 0) return -1;
 
     // Addition
     if (strcmp(argv[2], "add") == 0) {
         // Conversion of Acc from str to long int using strtol (more secure)
-        if (my_strtol_mycalc(getenv("Acc"), &acc_l, "acc", 0) < 0) return -1;
+        if (my_strtol(getenv("Acc"), &acc_l, "acc", 0) < 0) return -1;
 
         // sprintf() more secure than itoa() for conversion of: int -> str
         sprintf(acc_str, "%ld", acc_l += operand1 + operand2);
@@ -438,12 +419,16 @@ int mycalc(char *argv[]) {
     } 
     // Multiplication
     else if (strcmp(argv[2], "mul") == 0) {
-        int res = operand1 * operand2;
+        long res = operand1 * operand2;
 
         // Check for math errors (overflow or underflow)
         if (operand1 != 0) {
             if (res / operand1 != operand2) {
-                fprintf(stdout, "[ERROR] Overflow at multiplication\n");
+                if (res < 0)
+                    fprintf(stdout, "[ERROR] Underflow at multiplication\n");
+                else
+                    fprintf(stdout, "[ERROR] Overflow at multiplication\n");
+
                 return -1;
             }
         }
@@ -453,7 +438,7 @@ int mycalc(char *argv[]) {
     else if (strcmp(argv[2], "div") == 0) {
         // Check for division errors
         if (operand2 == 0) {
-            fprintf(stdout, "[ERROR] Division by zero is not allowed.\n");
+            fprintf(stdout, "[ERROR] Division by zero is not allowed\n");
             return -1;
         }
         fprintf(stderr, "[OK] %ld / %ld = %ld; Remainder %ld\n", operand1, operand2, operand1 / operand2, operand1 % operand2);
@@ -466,46 +451,41 @@ int mycalc(char *argv[]) {
     return 0;
 }
 
+
+
+int run_command(char ***argvv, int command_counter, int in_background) {
+    if (strcmp(argvv[0][0], "mycalc") == 0) {      // If command is mycalc
+        if (command_counter != 1)
+            fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
+        else
+            return mycalc(argvv[0]);
+    }
+    // If command is any other than myhistory or mycalc -> then it is executed by execvp()
+    else {      
+        return myshell(argvv, command_counter, in_background);
+    }
+}
+
+
 /***
  * Internal command myhistory
  *  @param *argv[]: array of arguments of a command
  *  @return -1 if error, 0 if it prints history of commands, 1 if it runs a command from history
 ***/
-int myhistory(char *argv[]) {
+int myhistory(char ***argvv) {
+    char **argv = argvv[0];
+    // If <myhistory>
     if (argv[1] == NULL) {
         print_history();
     } 
+    // If <myhistory> <index>
     else if (argv[2] == NULL) {
         // Conversion of command index from char* to int, aborts command if conversion fails
         long index;
-        if (my_strtol_mycalc(argv[1], &index, "", 1) < 0) {
+        if (my_strtol(argv[1], &index, "", 1) < 0) {
             fprintf(stdout, "ERROR: Command not found\n");
             return -1;
         }
-        // int index = atoi(argv[1]);
-
-        // if (index < 0 || index >= 20) {
-        //     fprintf(stdout, "ERROR: Command not found\n");
-        //     return -1
-        // }
-        // else {
-        //     fprintf(stderr, "Running command <%d>\n", index);
-        //     char *args[4] = {NULL, NULL, NULL, NULL}; // Initialize all elements to NULL
-        //     char arg0[12], arg1[12], arg2[12]; // Buffer to hold the string representation of the integers
-        //     if (history[index].args[0] != 0) {
-        //         sprintf(arg0, "%s", history[index].args[0]);
-        //         args[0] = arg0;
-        //     }
-        //     if (history[index].args[1] != 0) {
-        //         sprintf(arg1, "%s", history[index].args[1]);
-        //         args[1] = arg1;
-        //     }
-        //     if (history[index].args[2] != 0) {
-        //         sprintf(arg2, "%s", history[index].args[2]);
-        //         args[2] = arg2;
-        //     }
-        //     mycalc(args);
-        // }
 
         if (index < 0 || index >= 20 || n_elem < index) {
             fprintf(stdout, "ERROR: Command not found\n");
@@ -514,19 +494,20 @@ int myhistory(char *argv[]) {
         else {
             fprintf(stderr, "Running command %ld\n", index);
 
-            // if (history[index].argvv == NULL) {
-            //     fprintf(stderr, "ERROR: Command resources have been freed\n");
-            //     return -1;
-            // }
+            
             char ***argvv_execvp = history[index].argvv; // Get all commands of the piped sequence from history
+            
+            // argvv = history[index].argvv; // Get all commands of the piped sequence from history
             memcpy(filev, history[index].filev, sizeof(filev));
+            // *in_background = history[index].in_background;
 
-            if (myshell(argvv_execvp, history[index].num_commands, history[index].in_background, 1) < 0) {
-                fprintf(stderr, "ERROR: Failed to execute command\n");
+            if (myshell(argvv_execvp, history[index].num_commands, history[index].in_background) < 0) {
+                fprintf(stdout, "ERROR: Failed to execute command\n");
                 return -1;
             }
-        }
 
+            return 1;
+        }
     }
     else {
         fprintf(stdout, "ERROR: Command not found\n");
@@ -604,12 +585,13 @@ void sigchldhandler(int param)
 
 
 /***
+ * Conversion from string to long integer using strtol with some error handling
  * @param string: string to convert to long
  * @param number: pointer to store the result
  * @param var: variable name (used to print error message)
- * @param mode: 0 to print error message, otherwise it does not print error message 
+ * @param mode: 0 to print error message (made for mycalc), otherwise it does not print error message 
  * @return Error -1 otherwise 0 */
-int my_strtol_mycalc(char *string, long *number, const char* var, int mode) {
+int my_strtol(char *string, long *number, const char* var, int mode) {
     // https://stackoverflow.com/questions/8871711/atoi-how-to-identify-the-difference-between-zero-and-error
     char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
     
@@ -617,17 +599,21 @@ int my_strtol_mycalc(char *string, long *number, const char* var, int mode) {
     endptr = NULL;
     errno = 0;
     *number = strtol(nptr, &endptr, 10);
+
+    // Error extracting number (it is not an integer)
     if (nptr && *endptr != 0) {
         if (mode == 0)
             fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
         return -1;
     }
+    // Overflow
     else if (errno == ERANGE && *number == LONG_MAX)
     {
         if (mode == 0)
             fprintf(stdout, "[ERROR] Overflow at <%s>\n", var);
         return -1;
     }
+    // Underflow
     else if (errno == ERANGE && *number == LONG_MIN)
     {
         if (mode == 0)
@@ -638,73 +624,30 @@ int my_strtol_mycalc(char *string, long *number, const char* var, int mode) {
     return 0;
 }
 
-/* Error -1 otherwise 0 */
-int my_strtol_index(char *string, long *number, const char* var) {
-    char *nptr, *endptr = NULL;                            /* pointer to additional chars  */
-    
-    nptr = string;
-    endptr = NULL;
-    errno = 0;
-    *number = strtol(nptr, &endptr, 10);
-    if (nptr && *endptr != 0) {
-        fprintf(stdout, "[ERROR] Invalid index for myhistory command\n");
-        return -1;
-    }
-    else if (errno == ERANGE && *number == LONG_MAX)
-    {
-        fprintf(stdout, "[ERROR] Overflow at <%s>\n", var);
-        return -1;
-    }
-    else if (errno == ERANGE && *number == LONG_MIN)
-    {
-        fprintf(stdout, "[ERROR] Underflow at <%s>\n", var);
-        return -1;
-    }
-
-    return 0;
-}
-
 /***
- * It restores all file descriptors to their default values: stdin, stdout, stderr
- * @param stdfd_backup: array that stores the backup of all the standard file descriptors: stdin, stdout, stderr
-*/
-void restore_stdfd(int *stdfd_backup) {
-    for (int i = 0; i < 3; i++) {
-        if (stdfd_backup[i] != 0) {
-            close(i);                       /* close current */
-            dup(stdfd_backup[i]);            // STD = fd
-            close(stdfd_backup[i]);          /* close file */
-            stdfd_backup[i] = 0;
-        }
-    }
-}
-
-/***
- * It redirects the input/output to filev[fileno] and makes a backup of the stdfd
- * @param stdfd_backup: array that stores the backup of all the standard file descriptors: stdin, stdout, stderr.
+ * It redirects the input/output to filev[fileno]
  * @param fileno: file number to redirect: STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO
+ * @return fd of the opened file (-1 if error)
 */
-int redirect(int *stdfd_backup, int fileno) {
+int redirect_to_file(int fileno) {
+    // Opens the file in filev[fileno]
     int filev_fd;
     switch (fileno) {
         case STDIN_FILENO:
             if ((filev_fd = open(filev[STDIN_FILENO], O_RDONLY)) < 0) {
                 fprintf(stderr, "Error opening input file: %s\n", strerror(errno));
-                restore_stdfd(stdfd_backup);
                 return filev_fd;
             }
             break;
         case STDOUT_FILENO:
             if ((filev_fd = open(filev[STDOUT_FILENO], O_CREAT | O_WRONLY | O_TRUNC, 0664)) < 0) {
                 fprintf(stderr, "Error opening output file: %s\n", strerror(errno));
-                restore_stdfd(stdfd_backup);
                 return filev_fd;
             }
             break;
         case STDERR_FILENO:
             if ((filev_fd = open(filev[STDERR_FILENO],  O_CREAT | O_WRONLY | O_TRUNC , 0664)) < 0) {
                 fprintf(stderr, "Error opening error output file: %s\n", strerror(errno));
-                restore_stdfd(stdfd_backup);
                 return filev_fd;
             } 
             break;
@@ -713,25 +656,22 @@ int redirect(int *stdfd_backup, int fileno) {
             break;
     }
 
-    stdfd_backup[fileno] = dup(fileno);                            
-    close(fileno);          
-    dup(filev_fd);            
-    close(filev_fd);     
+    // Redirecting the opened file to stdin/stdout/stderr
+    if (close(fileno) < 0) {
+        fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+        exit(errno);
+    }
+    if (dup(filev_fd) < 0) {
+        fprintf(stderr, "Error duplicating file pointer: %s\n", strerror(errno));
+        exit(errno);
+    }      
+    if (close(filev_fd) < 0) {
+        fprintf(stderr, "Error closing file: %s\n", strerror(errno));
+        exit(errno);
+    }      
 
     return fileno;
 }
-
-
-
-
-// A lo mejor hay q cambiar todos los fprintf(stderr) por perror()
-// Each command must execute as an immediate child of the minishell, spawned by fork command (man 2 fork).
-// Si te apetece ponerle error control a los resultados de las operaciones. Good luck.
-
-
-
-// Incluido sigkill handler
-
 
 
 // zip p2_minishell.zip msh.c authors.txt
