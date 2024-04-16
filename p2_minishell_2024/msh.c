@@ -243,19 +243,19 @@ int main(int argc, char* argv[])
         }
         else {
             // Store command in history
-            if (n_elem == 20) {
+            if (n_elem == history_size) {
                 /* If history is full then free the oldest command, 
                 store the new one in the same memory space and move the head and tail */
                 free_command(&history[head]);
                 store_command(argvv, filev, in_background, &history[tail]);
-                head = ++head % 20;
+                head = ++head % history_size;
                 tail = head;
             }
             else {
                 /* If history is not full then just 
                 store it in the next available memory space */
                 store_command(argvv, filev, in_background, &history[tail]);
-                tail = ++tail % 20;
+                tail = ++tail % history_size;
                 n_elem++;
             }
             
@@ -348,9 +348,8 @@ int myshell(char*** argvv, int command_counter, int in_background) {
             }
 
             // EXECUTE COMMAND
-            if (execvp(argvv[i][0], argvv[i]) == -1) {
+            if (execvp(argvv[i][0], argvv[i]) == -1)
                 exit(errno);
-            }
         }
 
         // Close pipes in parent process
@@ -372,14 +371,17 @@ int myshell(char*** argvv, int command_counter, int in_background) {
 
         i++;
     }
-    
+
     if (in_background)
         // Prints the pid of the last command in the sequence if in background 
         fprintf(stderr, "[%d]\n", pid);
-    else
+    else {
         /* If it is in foreground then
             block the msh and wait for the last child process to finish */
-        waitpid(pid, &status, 0);
+        if (waitpid(pid, &status, 0 ) == -1) {
+            fprintf(stderr, "Error waiting for child process: %s\n", strerror(errno));
+        }
+    }
      
     return 0;
 }
@@ -503,14 +505,14 @@ int myhistory(char ***argvv) {
             return -1;
         }
 
-        if (index < 0 || index >= 20 || n_elem < index) {
+        if (index < 0 || index >= history_size || n_elem < index) {
             fprintf(stdout, "ERROR: Command not found\n");
             return -1;
         }
         else {
             fprintf(stderr, "Running command %ld\n", index);
 
-            index = (index + head) % 20;
+            index = (index + head) % history_size;
             
             char ***argvv_execvp = history[index].argvv; // Get all commands of the piped sequence from history
             memcpy(filev, history[index].filev, sizeof(filev));
@@ -540,7 +542,7 @@ void print_history() {
     struct command curr_cmd;    // Command
 
     for (i = 0; i < history_size; i++) {
-        curr_cmd = history[(i+head)%20];
+        curr_cmd = history[(i+head)%history_size];
 
         // IF THERE ARE NO MORE COMMANDS IN HISTORY THEN STOP PRINTING
         if (curr_cmd.argvv == NULL) break;
