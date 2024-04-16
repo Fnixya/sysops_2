@@ -262,7 +262,7 @@ int main(int argc, char* argv[])
             run_command(argvv, command_counter, in_background);
         }
 
-        print_command(argvv, filev, in_background);
+        // print_command(argvv, filev, in_background);
 	}
 	
 	return 0;
@@ -290,6 +290,7 @@ int myshell(char*** argvv, int command_counter, int in_background) {
                 exit(errno);
             }
 
+            // Save output of the pipe to be used in the current child process
             pipe_out = pipe_fd[STDOUT_FILENO];
         }
     
@@ -352,6 +353,7 @@ int myshell(char*** argvv, int command_counter, int in_background) {
             }
         }
 
+        // Close pipes in parent process
         if (i != command_counter - 1) {
             if (close(pipe_out) < 0) {
                 fprintf(stderr, "Error closing file: %s\n", strerror(errno));
@@ -364,7 +366,10 @@ int myshell(char*** argvv, int command_counter, int in_background) {
                 exit(errno);
             }
         }
-        pipe_in = pipe_fd[STDIN_FILENO];        
+
+        // Save input pipe for next child process
+        pipe_in = pipe_fd[STDIN_FILENO];
+
         i++;
     }
     
@@ -386,13 +391,15 @@ int myshell(char*** argvv, int command_counter, int in_background) {
  * @return -1 if error, 0 if successful
  */
 int mycalc(char *argv[]) {
-    // Check if the command has the correct structure
+    // Check if the command has no less than 4 arguments
     for (int i = 0; i < 4; i++) {
         if (argv[i] == NULL) {
             fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
             return -1;
         }
     }
+
+    // Check if the command has no more than 4 arguments
     if (argv[4] != NULL) {
         fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
         return -1;
@@ -402,7 +409,6 @@ int mycalc(char *argv[]) {
 
     // Conversion of <openrand_1> from str to long int using strtol (more secure)
     if (my_strtol(argv[1], &operand1, "operand_1", 0) < 0) return -1;
-
 
     // Conversion of <openrand_2> from str to long int using strtol (more secure)
     if (my_strtol(argv[3], &operand2, "operand_2", 0) < 0) return -1;
@@ -421,7 +427,7 @@ int mycalc(char *argv[]) {
     else if (strcmp(argv[2], "mul") == 0) {
         long res = operand1 * operand2;
 
-        // Check for math errors (overflow or underflow)
+        // Check for math errors in multiplication (overflow or underflow)
         if (operand1 != 0) {
             if (res / operand1 != operand2) {
                 if (res < 0)
@@ -452,15 +458,25 @@ int mycalc(char *argv[]) {
 }
 
 
-
+/***
+ * It runs the POSIX services or the internal comand myhistory
+ * @param ***argvv: array of all arguments of the command sequence
+ * @param command_counter: number of commands of ***argvv
+ * @param in_background: 1 if the command is executed in background, 0 if not
+ * @param from_history: 1 if the command is extracted from history, 0 if it is read from the terminal
+ * @return -1 if error, 0 if successful
+ */
 int run_command(char ***argvv, int command_counter, int in_background) {
-    if (strcmp(argvv[0][0], "mycalc") == 0) {      // If command is mycalc
-        if (command_counter != 1)
+    // Run mycalc if command is mycalc
+    if (strcmp(argvv[0][0], "mycalc") == 0) {      
+        // If mycalc is part of a sequence of commands then don't execute it: format is wrong
+        if (command_counter != 1) {
             fprintf(stdout, "[ERROR] The structure of the command is mycalc <operand_1> <add/mul/div> <operand_2>\n");
-        else
+            return -1;
+        } else
             return mycalc(argvv[0]);
     }
-    // If command is any other than myhistory or mycalc -> then it is executed by execvp()
+    // If command is not mycalc -> then it is executed by execvp() by a child process
     else {      
         return myshell(argvv, command_counter, in_background);
     }
@@ -494,14 +510,12 @@ int myhistory(char ***argvv) {
         else {
             fprintf(stderr, "Running command %ld\n", index);
 
+            index = (index + head) % 20;
             
             char ***argvv_execvp = history[index].argvv; // Get all commands of the piped sequence from history
-            
-            // argvv = history[index].argvv; // Get all commands of the piped sequence from history
             memcpy(filev, history[index].filev, sizeof(filev));
-            // *in_background = history[index].in_background;
 
-            if (myshell(argvv_execvp, history[index].num_commands, history[index].in_background) < 0) {
+            if (run_command(argvv_execvp, history[index].num_commands, history[index].in_background) < 0) {
                 fprintf(stdout, "ERROR: Failed to execute command\n");
                 return -1;
             }
